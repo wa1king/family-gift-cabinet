@@ -5,8 +5,8 @@ export const TAG_GROUPS = Object.freeze([
   Object.freeze({ id: 'value', label: '价值', options: Object.freeze(['小份心意', '精致礼物', '特别心意']) }),
 ]);
 
-export const LIMITS = Object.freeze({ items: 5000, history: 20000, quantity: 9999, photoCharacters: 2800000, notes: 4000, catalogTagsPerGroup: 5000 });
-const CATEGORIES = ['冰箱贴', '拉布布', '其他'];
+export const LIMITS = Object.freeze({ items: 5000, history: 20000, quantity: 9999, photoCharacters: 2800000, notes: 4000, catalogTagsPerGroup: 5000, categories: 5000 });
+export const DEFAULT_CATEGORIES = Object.freeze(['冰箱贴', '拉布布', '其他']);
 const ART = ['magnet-travel', 'magnet-city', 'magnet-flower', 'toy-green', 'toy-pink', 'toy-cocoa'];
 const UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 let idSequence = 0;
@@ -69,6 +69,21 @@ function tags(value = {}) {
 function tagCatalog(value = {}) {
   record(value, '标签目录');
   return Object.fromEntries(TAG_GROUPS.map(({ id, label }) => [id, tagList(value[id], label, LIMITS.catalogTagsPerGroup)]));
+}
+
+function normalizedCategory(value) {
+  return string(value, '物品类别', { maximum: 40, required: true });
+}
+
+function categoryList(value = []) {
+  return [...new Set(Array.from(list(value, '物品类别', LIMITS.categories), normalizedCategory))];
+}
+
+function addItemCategories(categories, items) {
+  const values = new Set(categories);
+  for (const item of items) values.add(item.category);
+  if (values.size > LIMITS.categories) throw new Error(`物品类别超过上限 ${LIMITS.categories}`);
+  return [...values];
 }
 
 function addItemTagsToCatalog(catalog, items) {
@@ -145,13 +160,12 @@ function identifier(prefix, usedIds) {
 
 function normalizeItem(value) {
   record(value, '物品');
-  const category = choice(value.category, CATEGORIES, '物品类别', '其他');
+  const category = normalizedCategory(value.category);
   return {
     id: string(value.id, '物品编号', { required: true, maximum: 120 }),
     name: string(value.name, '物品名称', { required: true, maximum: 80 }),
     category,
     quantity: count(value.quantity, '物品数量'),
-    unit: string(value.unit, '单位', { required: true, maximum: 12, fallback: '件' }),
     location: string(value.location, '存放位置', { maximum: 120 }),
     condition: string(value.condition, '包装与成色', { maximum: 80 }),
     notes: string(value.notes, '备注', { maximum: LIMITS.notes }),
@@ -169,7 +183,6 @@ function normalizeHistory(value) {
     itemId: string(value.itemId, '关联物品编号', { required: true, maximum: 120 }),
     itemName: string(value.itemName, '送出时物品名称', { required: true, maximum: 80 }),
     quantity: count(value.quantity, '送出数量', 1),
-    unit: string(value.unit, '单位', { required: true, maximum: 12, fallback: '件' }),
     recipient: string(value.recipient, '收礼人', { required: true, maximum: 100 }),
     note: string(value.note, '送出备注', { maximum: 1000 }),
     date: day(value.date),
@@ -180,7 +193,7 @@ function normalizeHistory(value) {
 /** Validate an imported snapshot and return a fresh, allow-listed copy. */
 export function validateState(value) {
   record(value, '备份');
-  if (![1, 2].includes(value.schemaVersion)) throw new Error('备份版本不支持，请使用本应用导出的文件');
+  if (![1, 2, 3].includes(value.schemaVersion)) throw new Error('备份版本不支持，请使用本应用导出的文件');
   const isLegacy = value.schemaVersion === 1;
   const items = Array.from(list(value.items, '物品列表', LIMITS.items), isLegacy ? migrateV1Item : normalizeItem);
   const history = Array.from(list(value.history, '送出记录', LIMITS.history), normalizeHistory);
@@ -193,7 +206,18 @@ export function validateState(value) {
   const catalog = isLegacy
     ? Object.fromEntries(TAG_GROUPS.map(({ id, options }) => [id, [...options]]))
     : tagCatalog(value.tagCatalog);
-  return { schemaVersion: 2, tagCatalog: addItemTagsToCatalog(catalog, items), items, history };
+  const categories = value.schemaVersion < 3 ? [...DEFAULT_CATEGORIES] : categoryList(value.categories);
+  return { schemaVersion: 3, categories: addItemCategories(categories, items), tagCatalog: addItemTagsToCatalog(catalog, items), items, history };
+}
+
+/** Add an available item category without assigning it to any item. */
+export function addCategory(state, name) {
+  const category = normalizedCategory(name);
+  const next = validateState(state);
+  if (next.categories.includes(category)) throw new Error('这个类别已经存在');
+  if (next.categories.length >= LIMITS.categories) throw new Error('物品类别已达上限');
+  next.categories.push(category);
+  return next;
 }
 
 /** Add an available label without assigning it to any item. */
@@ -260,21 +284,22 @@ export function upsertItem(state, item) {
   const normalized = normalizeItem({ ...previous, ...item, id: itemId, createdAt: previous.createdAt });
   if (index < 0) next.items.push(normalized);
   else next.items[index] = normalized;
+  next.categories = addItemCategories(next.categories, [normalized]);
   addItemTagsToCatalog(next.tagCatalog, [normalized]);
   return next;
 }
 
-/** Record a gift, including gifts that use up the last available unit. */
+/** Record a gift, including gifts that use up the last available item. */
 export function giveItem(state, { itemId, quantity, recipient, note = '', date = today() }) {
   const next = validateState(state);
   const item = next.items.find(entry => entry.id === itemId);
   if (!item) throw new Error('找不到这件物品');
   count(quantity, '送出数量', 1);
-  if (quantity > item.quantity) throw new Error(`库存不足，目前还剩 ${item.quantity} ${item.unit}`);
+  if (quantity > item.quantity) throw new Error(`库存不足，目前还剩 ${item.quantity}`);
   if (next.history.length >= LIMITS.history) throw new Error('送出记录已达上限');
   const entry = normalizeHistory({
     id: identifier('gift', new Set([...next.items, ...next.history].map(value => value.id))),
-    itemId: item.id, itemName: item.name, quantity, unit: item.unit, recipient, note, date,
+    itemId: item.id, itemName: item.name, quantity, recipient, note, date,
     createdAt: new Date().toISOString(),
   });
   item.quantity -= quantity;
@@ -299,17 +324,18 @@ export function undoGift(state, historyId) {
 export function createDemoState() {
   const createdAt = '2026-10-18T00:00:00.000Z';
   const definitions = [
-    { id: 'demo-kyoto', name: '京都鸟居冰箱贴', category: '冰箱贴', quantity: 3, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '旅行时带回的小纪念，适合喜欢逛城市、收集纪念品的朋友。', art: 'magnet-travel', tags: { scene: ['伴手礼', '见面小礼'], relationship: ['朋友', '同事'], value: ['小份心意'] } },
-    { id: 'demo-shanghai', name: '上海城市冰箱贴', category: '冰箱贴', quantity: 2, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，纸卡包装', notes: '一份轻巧的城市纪念，可以随手带去见朋友。', art: 'magnet-city', tags: { scene: ['见面小礼', '伴手礼'], relationship: ['朋友', '同事'], value: ['小份心意'] } },
-    { id: 'demo-flower', name: '小雏菊冰箱贴', category: '冰箱贴', quantity: 1, unit: '枚', location: '书房 · 第二层抽屉', condition: '全新，独立纸盒', notes: '柔和的小花造型，适合喜欢可爱小物的朋友。', art: 'magnet-flower', tags: { scene: ['感谢', '见面小礼'], relationship: ['朋友', '家人'], value: ['小份心意'] } },
-    { id: 'demo-seaside', name: '海边旅行冰箱贴', category: '冰箱贴', quantity: 4, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '带有海边度假气息的小礼物。', art: 'magnet-travel', tags: { scene: ['伴手礼', '见面小礼'], relationship: ['朋友', '家人', '同事'], value: ['小份心意'] } },
-    { id: 'demo-night', name: '城市夜景冰箱贴套装', category: '冰箱贴', quantity: 1, unit: '套', location: '书房 · 礼物收纳盒', condition: '全新，礼盒未拆封', notes: '一套可以一起摆放的城市夜景，适合认真准备的小礼物。', art: 'magnet-city', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '长辈'], value: ['精致礼物'] } },
-    { id: 'demo-green', name: '森林绿拉布布', category: '拉布布', quantity: 1, unit: '只', location: '书房 · 展示柜下层', condition: '未拆封，包装完整', notes: '适合喜欢潮玩和绿色系的朋友。', art: 'toy-green', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '家人'], value: ['特别心意'] } },
-    { id: 'demo-pink', name: '樱花粉拉布布', category: '拉布布', quantity: 2, unit: '只', location: '书房 · 礼物收纳盒', condition: '全新，盒装', notes: '温柔的粉色，适合喜欢可爱挂件的朋友。', art: 'toy-pink', tags: { scene: ['生日', '见面小礼'], relationship: ['朋友', '家人'], value: ['精致礼物'] } },
-    { id: 'demo-cocoa', name: '可可拉布布', category: '拉布布', quantity: 1, unit: '只', location: '书房 · 展示柜下层', condition: '已拆盒，未使用，包装保留', notes: '送之前可以先确认朋友是否介意拆盒。', art: 'toy-cocoa', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '同事'], value: ['精致礼物'] } },
+    { id: 'demo-kyoto', name: '京都鸟居冰箱贴', category: '冰箱贴', quantity: 3, location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '旅行时带回的小纪念，适合喜欢逛城市、收集纪念品的朋友。', art: 'magnet-travel', tags: { scene: ['伴手礼', '见面小礼'], relationship: ['朋友', '同事'], value: ['小份心意'] } },
+    { id: 'demo-shanghai', name: '上海城市冰箱贴', category: '冰箱贴', quantity: 2, location: '玄关柜 · 旅行纪念盒', condition: '全新，纸卡包装', notes: '一份轻巧的城市纪念，可以随手带去见朋友。', art: 'magnet-city', tags: { scene: ['见面小礼', '伴手礼'], relationship: ['朋友', '同事'], value: ['小份心意'] } },
+    { id: 'demo-flower', name: '小雏菊冰箱贴', category: '冰箱贴', quantity: 1, location: '书房 · 第二层抽屉', condition: '全新，独立纸盒', notes: '柔和的小花造型，适合喜欢可爱小物的朋友。', art: 'magnet-flower', tags: { scene: ['感谢', '见面小礼'], relationship: ['朋友', '家人'], value: ['小份心意'] } },
+    { id: 'demo-seaside', name: '海边旅行冰箱贴', category: '冰箱贴', quantity: 4, location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '带有海边度假气息的小礼物。', art: 'magnet-travel', tags: { scene: ['伴手礼', '见面小礼'], relationship: ['朋友', '家人', '同事'], value: ['小份心意'] } },
+    { id: 'demo-night', name: '城市夜景冰箱贴套装', category: '冰箱贴', quantity: 1, location: '书房 · 礼物收纳盒', condition: '全新，礼盒未拆封', notes: '一套可以一起摆放的城市夜景，适合认真准备的小礼物。', art: 'magnet-city', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '长辈'], value: ['精致礼物'] } },
+    { id: 'demo-green', name: '森林绿拉布布', category: '拉布布', quantity: 1, location: '书房 · 展示柜下层', condition: '未拆封，包装完整', notes: '适合喜欢潮玩和绿色系的朋友。', art: 'toy-green', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '家人'], value: ['特别心意'] } },
+    { id: 'demo-pink', name: '樱花粉拉布布', category: '拉布布', quantity: 2, location: '书房 · 礼物收纳盒', condition: '全新，盒装', notes: '温柔的粉色，适合喜欢可爱挂件的朋友。', art: 'toy-pink', tags: { scene: ['生日', '见面小礼'], relationship: ['朋友', '家人'], value: ['精致礼物'] } },
+    { id: 'demo-cocoa', name: '可可拉布布', category: '拉布布', quantity: 1, location: '书房 · 展示柜下层', condition: '已拆盒，未使用，包装保留', notes: '送之前可以先确认朋友是否介意拆盒。', art: 'toy-cocoa', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '同事'], value: ['精致礼物'] } },
   ];
   return validateState({
-    schemaVersion: 2,
+    schemaVersion: 3,
+    categories: [...DEFAULT_CATEGORIES],
     tagCatalog: Object.fromEntries(TAG_GROUPS.map(({ id, options }) => [id, [...options]])),
     items: definitions.map(item => ({ ...item, photo: null, createdAt })),
     history: [],
