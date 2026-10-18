@@ -1,4 +1,4 @@
-import { TAG_GROUPS, createDemoState, filterItems, giveItem, undoGift, validateState, upsertItem } from './model.js';
+import { TAG_GROUPS, createDemoState, filterItems, giveItem, undoGift, validateState, upsertItem, addTag, renameTag, removeTag } from './model.js?v=20261018-tags';
 
 const KEY = 'little-gift-cabinet-v1';
 const BACKUP_KEY = KEY + '-before-import';
@@ -11,13 +11,16 @@ const arts = ['magnet-travel','magnet-city','magnet-flower','toy-green','toy-pin
 const artFor = item => item.photo || `./assets/${arts.includes(item.art) ? item.art : item.category === '拉布布' ? 'toy-green' : 'magnet-travel'}.svg`;
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-let state, storageError = '', lastStored = null, pendingImport = null, editorDraft = null, editorBase = null;
+let state, storageError = '', lastStored = null, pendingImport = null, editorDraft = null, editorBase = null, editorCatalogBase = null;
 let view = 'pick';
-let filters = { search:'', category:'', tags:{ interest:[], occasion:[], value:[] }, includeEmpty:false };
+const emptyTags = () => Object.fromEntries(TAG_GROUPS.map(g=>[g.id,[]]));
+const emptyFilters = () => ({ search:'', category:'', tags:emptyTags(), includeEmpty:false });
+let filters = emptyFilters();
 let cabinetSearch = '', cabinetCategory = '', includeEmpty = false;
 let toastTimer;
 let photoRequest = 0;
 let pendingReset = '';
+let tagUndo = null;
 
 try {
   lastStored = localStorage.getItem(KEY);
@@ -62,16 +65,17 @@ function save(next, { backup = false, allowRecovery = false } = {}) {
       ? '此次清单修改尚未保存，但恢复原备份时遇到问题。请先导出当前清单和导入前的数据。'
       : '本机存储空间不足或不可用，请先导出备份，或减少照片后重试。此次修改尚未保存。');
   }
-  lastStored = serialized; state = clean; storageError = ''; render();
+  lastStored = serialized; state = clean; storageError = '';
+  render();
 }
 
 function selectedCount() { return TAG_GROUPS.reduce((n,g) => n + filters.tags[g.id].length, 0); }
-function availableTags(group) { return [...new Set([...group.options, ...state.items.flatMap(i => i.tags[group.id] || []), ...(editorDraft?.tags[group.id] || [])])]; }
+function availableTags(group) { return [...new Set([...state.tagCatalog[group.id], ...(editorDraft?.tags[group.id] || [])])]; }
 function chip(group, value, active, context = 'filter') {
   return `<button type="button" class="chip${active ? ' selected' : ''}" data-action="${context}-tag" data-group="${group}" data-tag="${esc(value)}" aria-pressed="${active}">${esc(value)}</button>`;
 }
 function cards(items) {
-  return `<div class="gift-grid">${items.map(i => `<article class="gift-card"><button class="card-hit" data-action="detail" data-id="${esc(i.id)}" aria-label="查看${esc(i.name)}，剩余${i.quantity}${esc(i.unit)}"><div class="card-art"><img src="${esc(artFor(i))}" alt="${esc(i.name)}${i.photo ? '' : '示意插画'}" loading="lazy"><span class="quantity-badge">${i.quantity ? `${i.quantity} ${esc(i.unit)}` : '已送完'}</span></div><div class="card-content"><h3>${esc(i.name)}</h3><p class="card-location">${icon('pin')}${esc(i.location || '未填写位置')}</p><div class="card-tags">${[...(i.tags.interest || []),...(i.tags.occasion || [])].slice(0,2).map(t=>`<span class="mini-tag">${esc(t)}</span>`).join('')}</div></div></button></article>`).join('')}</div>`;
+  return `<div class="gift-grid">${items.map(i => `<article class="gift-card"><button class="card-hit" data-action="detail" data-id="${esc(i.id)}" aria-label="查看${esc(i.name)}，剩余${i.quantity}${esc(i.unit)}"><div class="card-art"><img src="${esc(artFor(i))}" alt="${esc(i.name)}${i.photo ? '' : '示意插画'}" loading="lazy"><span class="quantity-badge">${i.quantity ? `${i.quantity} ${esc(i.unit)}` : '已送完'}</span></div><div class="card-content"><h3>${esc(i.name)}</h3><p class="card-location">${icon('pin')}${esc(i.location || '未填写位置')}</p><div class="card-tags">${TAG_GROUPS.flatMap(g=>i.tags[g.id]).slice(0,2).map(t=>`<span class="mini-tag">${esc(t)}</span>`).join('')}</div></div></button></article>`).join('')}</div>`;
 }
 
 function empty(title, description, action, label) {
@@ -80,8 +84,8 @@ function empty(title, description, action, label) {
 const notice = () => '<p class="demo-notice">示例物品 · 数据仅保存在当前设备</p>';
 function picker() {
   const matches = filterItems(state.items,filters);
-  return `<section class="intro"><h1>挑礼物</h1><p>按朋友的喜好和场合筛选</p></section>
-    <section class="filter-panel" aria-label="按标签挑选礼物"><div class="section-heading"><h2>筛选标签</h2><span class="micro">可多选</span></div>${TAG_GROUPS.map(g => `<div class="filter-group"><div class="group-label">${esc(g.id==='value'?'分量':g.label)}</div><div class="chips">${availableTags(g).map(t=>chip(g.id,t,filters.tags[g.id].includes(t))).join('')}</div></div>`).join('')}<div class="filter-footer"><span class="filter-help">同组任选其一，不同组同时满足</span><button class="text-button" data-action="clear-filters">清空 · 看全部</button></div></section>
+  return `<section class="intro"><h1>挑礼物</h1><p>按场景、关系和价值筛选</p></section>
+    <section class="filter-panel" aria-label="按标签挑选礼物"><div class="section-heading"><h2>筛选标签</h2><button class="text-button" data-action="manage-tags">管理标签</button></div>${TAG_GROUPS.map(g => `<div class="filter-group"><div class="group-label">${esc(g.label)}</div><div class="chips">${availableTags(g).length?availableTags(g).map(t=>chip(g.id,t,filters.tags[g.id].includes(t))).join(''):'<span class="empty-tags">还没有标签，可在管理中添加</span>'}</div></div>`).join('')}<div class="filter-footer"><span class="filter-help">可多选 · 同组任选其一，不同组同时满足</span><button class="text-button" data-action="clear-filters">清空 · 看全部</button></div></section>
     <div class="result-heading"><h2>${selectedCount() ? '筛选结果' : '可送礼物'}<span class="count">${matches.length} 款</span></h2></div>
     ${matches.length ? cards(matches) : empty('没有符合条件的物品','可以取消部分标签，或清空筛选查看全部。','clear-filters','查看全部物品')}${notice()}`;
 }
@@ -98,37 +102,62 @@ function history() {
   return `<section class="view-intro"><h1>送出记录</h1><p>查看收礼人、日期和数量</p></section>${state.history.length ? `<div class="history-list">${[...state.history].reverse().map(h=>{const i=state.items.find(i=>i.id===h.itemId);return `<article class="history-card"><img src="${esc(artFor(i || {}))}" alt="${esc(h.itemName)}"><div class="record"><h3>${esc(h.itemName)} × ${h.quantity}</h3><p>送给 ${esc(h.recipient)}${h.note?`<br><span class="record-note">${esc(h.note)}</span>`:''}</p><div class="record-footer"><time datetime="${esc(h.date)}">${esc(h.date)}</time><button class="text-button" data-action="undo" data-id="${esc(h.id)}">撤销，放回柜子</button></div></div></article>`;}).join('')}</div>` : empty('还没有送出记录','在物品详情中记录送出后，会显示在这里。','go-pick','挑礼物')}`;
 }
 function render() {
+  TAG_GROUPS.forEach(g=>{filters.tags[g.id]=filters.tags[g.id].filter(t=>state.tagCatalog[g.id].includes(t));});
   main.innerHTML = (storageError ? `<div class="page-error">${esc(storageError)}</div>`:'') + (view==='pick' ? picker() : view==='cabinet' ? cabinet() : history());
   document.querySelectorAll('[data-view]').forEach(b=>{ const on = b.dataset.view===view; b.classList.toggle('active',on); if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current'); });
 }
-function openSheet(title, body, { formId = '', saveId = '' } = {}) {
+function openSheet(title, body, { formId = '', saveId = '', cancelAction = 'close' } = {}) {
   const header = formId
-    ? `<div class="sheet-head form-head"><button type="button" class="sheet-cancel" data-action="close">取消</button><h2 id="sheet-title">${esc(title)}</h2><button type="submit" class="sheet-save" form="${formId}"${saveId?` id="${saveId}"`:''}>保存</button></div>`
+    ? `<div class="sheet-head form-head"><button type="button" class="sheet-cancel" data-action="${cancelAction}">取消</button><h2 id="sheet-title">${esc(title)}</h2><button type="submit" class="sheet-save" form="${formId}"${saveId?` id="${saveId}"`:''}>保存</button></div>`
     : `<div class="sheet-head"><h2 id="sheet-title">${esc(title)}</h2><button class="close-button" data-action="close" aria-label="关闭">×</button></div>`;
   $('#sheet-content').innerHTML = `${header}<div class="sheet-body">${body}</div>`;
   if(!sheet.open) sheet.showModal();
   sheet.scrollTop = 0;
 }
-function clearSheetState() { editorDraft=null; editorBase=null; pendingImport=null; pendingReset=''; photoRequest+=1; }
+function clearSheetState() { editorDraft=null; editorBase=null; editorCatalogBase=null; pendingImport=null; pendingReset=''; photoRequest+=1; }
 function closeSheet() { sheet.close(); clearSheetState(); }
 function fieldError(message) { const el = $('#form-error',sheet); if(el){el.textContent=message;el.classList.add('visible');el.scrollIntoView({block:'nearest'});}else toast(message); }
 function detail(id) {
   const i = state.items.find(i=>i.id===id); if(!i)return;
   editorDraft=null;
-  openSheet('物品详情',`<img class="detail-image" src="${esc(artFor(i))}" alt="${esc(i.name)}${i.photo?'':'示意插画'}"><p class="detail-category">${esc(i.category)}${i.photo?'':' · 示例插画'}</p><h3 class="detail-name">${esc(i.name)}</h3><dl class="detail-meta"><div><dt>剩余数量</dt><dd>${i.quantity} ${esc(i.unit)}</dd></div><div><dt>放在哪里</dt><dd>${esc(i.location || '未填写')}</dd></div><div><dt>包装状态</dt><dd>${esc(i.condition || '未填写')}</dd></div><div><dt>心意分量</dt><dd>${esc(i.tags.value.join('、') || '未填写')}</dd></div></dl>${TAG_GROUPS.filter(g=>g.id!=='value').map(g=>`<div class="detail-group"><h3>${esc(g.label)}</h3><div class="chips">${i.tags[g.id].length?i.tags[g.id].map(t=>`<span class="chip">${esc(t)}</span>`).join(''):'<span class="micro">还没加标签</span>'}</div></div>`).join('')}${i.notes?`<div class="detail-group"><h3>备注</h3><p>${esc(i.notes)}</p></div>`:''}<div class="button-row"><button class="secondary" data-action="edit" data-id="${esc(i.id)}">编辑物品</button><button class="primary" data-action="give" data-id="${esc(i.id)}" ${i.quantity===0?'disabled':''}>${i.quantity===0?'已经送完':'记录送出'}</button></div>`);
+  openSheet('物品详情',`<img class="detail-image" src="${esc(artFor(i))}" alt="${esc(i.name)}${i.photo?'':'示意插画'}"><p class="detail-category">${esc(i.category)}${i.photo?'':' · 示例插画'}</p><h3 class="detail-name">${esc(i.name)}</h3><dl class="detail-meta"><div><dt>剩余数量</dt><dd>${i.quantity} ${esc(i.unit)}</dd></div><div><dt>放在哪里</dt><dd>${esc(i.location || '未填写')}</dd></div><div><dt>包装状态</dt><dd>${esc(i.condition || '未填写')}</dd></div><div><dt>价值</dt><dd>${esc(i.tags.value.join('、') || '未填写')}</dd></div></dl>${TAG_GROUPS.filter(g=>g.id!=='value').map(g=>`<div class="detail-group"><h3>${esc(g.label)}</h3><div class="chips">${i.tags[g.id].length?i.tags[g.id].map(t=>`<span class="chip">${esc(t)}</span>`).join(''):'<span class="micro">还没加标签</span>'}</div></div>`).join('')}${i.notes?`<div class="detail-group"><h3>备注</h3><p>${esc(i.notes)}</p></div>`:''}<div class="button-row"><button class="secondary" data-action="edit" data-id="${esc(i.id)}">编辑物品</button><button class="primary" data-action="give" data-id="${esc(i.id)}" ${i.quantity===0?'disabled':''}>${i.quantity===0?'已经送完':'记录送出'}</button></div>`);
 }
 function tagEditor(group) {
-  return `<div class="form-tags" data-tag-editor="${group.id}"><span class="form-group-title">${esc(group.label)}</span><div class="chips" id="editor-tags-${group.id}">${availableTags(group).map(t=>chip(group.id,t,editorDraft.tags[group.id].includes(t),'editor')).join('')}</div><div class="custom-tag"><input id="custom-${group.id}" maxlength="24" placeholder="写一个自己的标签" aria-label="添加${esc(group.label)}标签"><button type="button" data-action="custom-tag" data-group="${group.id}">添加</button></div></div>`;
+  return `<div class="form-tags" data-tag-editor="${group.id}"><span class="form-group-title">${esc(group.label)}</span><div class="chips" id="editor-tags-${group.id}">${availableTags(group).map(t=>chip(group.id,t,editorDraft.tags[group.id].includes(t),'editor')).join('')}</div><div class="custom-tag"><input id="custom-${group.id}" maxlength="40" placeholder="写一个自己的标签" aria-label="添加${esc(group.label)}标签"><button type="button" data-action="custom-tag" data-group="${group.id}">添加</button></div></div>`;
+}
+function tagUsage(group, tag) { return state.items.filter(item=>item.tags[group].includes(tag)).length; }
+function manageTags() {
+  editorDraft=null;
+  openSheet('管理标签',`<div id="form-error" class="inline-error" role="alert"></div><p class="tag-manager-help">改名会同步到所有物品；删除标签会同时从物品中移除。</p>${tagUndo?`<div class="tag-undo" role="status"><span>${esc(tagUndo.message)}</span><button class="text-button" data-action="undo-tag-change">撤销</button></div>`:''}${TAG_GROUPS.map(g=>`<section class="tag-manager-group" aria-label="管理${esc(g.label)}标签"><h3>${esc(g.label)}</h3><div class="tag-list">${state.tagCatalog[g.id].length?state.tagCatalog[g.id].map(tag=>`<div class="tag-row"><div class="tag-row-copy"><span>${esc(tag)}</span><small>${tagUsage(g.id,tag)} 款物品</small></div><button class="text-button" data-action="rename-tag" data-group="${g.id}" data-tag="${esc(tag)}" aria-label="修改${esc(g.label)}标签：${esc(tag)}">修改</button><button class="text-button danger-text" data-action="delete-tag" data-group="${g.id}" data-tag="${esc(tag)}" aria-label="删除${esc(g.label)}标签：${esc(tag)}">删除</button></div>`).join(''):'<p class="tag-list-empty">还没有标签，添加一个吧</p>'}</div><form class="tag-add-form" data-group="${g.id}"><input name="tag" maxlength="40" placeholder="添加${esc(g.label)}标签" aria-label="新增${esc(g.label)}标签" required><button class="secondary" type="submit">添加</button></form></section>`).join('')}`);
+}
+function saveTagChange(next, message, {group, oldTag, newTag} = {}) {
+  const before=state;
+  const wasSelected=group && filters.tags[group].includes(oldTag);
+  save(next);
+  if(wasSelected && newTag){filters.tags[group].push(newTag);render();}
+  tagUndo={before,after:JSON.stringify(state),message};
+  manageTags();
+}
+function renameTagForm(group, tag) {
+  const definition=TAG_GROUPS.find(g=>g.id===group);
+  if(!definition || !state.tagCatalog[group].includes(tag))throw new Error('这个标签已经不存在，请重新打开管理标签。');
+  openSheet('修改标签',`<form id="rename-tag-form" data-group="${group}" data-tag="${esc(tag)}"><div id="form-error" class="inline-error" role="alert"></div><label class="field"><span>${esc(definition.label)}标签</span><input name="tag" value="${esc(tag)}" maxlength="40" required></label><p class="tag-manager-help">保存后，${tagUsage(group,tag)} 款物品上的这个标签也会更新。</p></form>`,{formId:'rename-tag-form',cancelAction:'manage-tags'});
+}
+function deleteTagConfirmation(group, tag) {
+  const definition=TAG_GROUPS.find(g=>g.id===group);
+  if(!definition || !state.tagCatalog[group].includes(tag))throw new Error('这个标签已经不存在，请重新打开管理标签。');
+  openSheet('删除标签',`<div id="form-error" class="inline-error" role="alert"></div><p class="tag-delete-title">删除“${esc(tag)}”？</p><p class="tag-manager-help">将从${esc(definition.label)}选项和 ${tagUsage(group,tag)} 款物品中移除这个标签。物品、照片、数量和送出记录都会保留。</p><div class="button-row"><button class="secondary" data-action="manage-tags">保留标签</button><button class="danger-button" data-action="confirm-delete-tag" data-group="${group}" data-tag="${esc(tag)}">删除标签</button></div>`);
 }
 function photoPicker(item) {
   return `<div class="photo-uploader"><img id="photo-preview" class="photo-thumb" src="${esc(artFor(item))}" alt="物品照片预览"><div class="photo-copy"><p class="photo-title">${item.photo?'更换物品照片':'添加物品照片'}</p><p id="photo-status" role="status" aria-live="polite">可拍照或从相册选择</p></div><div class="photo-actions" role="group" aria-label="选择照片来源"><button type="button" class="photo-source" data-action="photo-camera" aria-controls="item-photo-camera"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="3.5"/></svg><span>拍照</span></button><button type="button" class="photo-source" data-action="photo-album" aria-controls="item-photo-album"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg><span>从相册选择</span></button></div><input type="file" id="item-photo-camera" accept="image/*" capture="environment" hidden tabindex="-1"><input type="file" id="item-photo-album" accept="image/*" hidden tabindex="-1"></div>`;
 }
 function editItem(id) {
   const existing = state.items.find(i=>i.id===id);
-  editorDraft = existing ? structuredClone(existing) : {id:uid(),name:'',category:'冰箱贴',quantity:1,unit:'个',location:'',condition:'',notes:'',photo:null,art:'magnet-travel',tags:{interest:[],occasion:[],value:[]},createdAt:new Date().toISOString()};
+  editorDraft = existing ? structuredClone(existing) : {id:uid(),name:'',category:'冰箱贴',quantity:1,unit:'个',location:'',condition:'',notes:'',photo:null,art:'magnet-travel',tags:emptyTags(),createdAt:new Date().toISOString()};
   editorBase = existing ? JSON.stringify(existing) : null;
+  editorCatalogBase = structuredClone(state.tagCatalog);
   const i=editorDraft;
-  openSheet(existing?'编辑物品':'添加物品',`<form id="item-form"><div id="form-error" class="inline-error" role="alert"></div>${photoPicker(i)}<label class="field"><span>名称 *</span><input name="name" value="${esc(i.name)}" placeholder="例如：旅行带回的海边冰箱贴" maxlength="80" required></label><label class="field"><span>物品类别</span><select name="category">${['冰箱贴','拉布布','其他'].map(c=>`<option ${i.category===c?'selected':''}>${c}</option>`).join('')}</select></label><div class="form-columns"><label class="field"><span>可送数量 *</span><input type="number" inputmode="numeric" min="0" max="9999" step="1" name="quantity" value="${i.quantity}" required></label><label class="field"><span>单位</span><input name="unit" maxlength="10" value="${esc(i.unit)}" placeholder="个 / 盒 / 套" required></label></div><label class="field"><span>存放位置</span><input name="location" maxlength="80" value="${esc(i.location)}" placeholder="例如：书房柜子第二层"></label><label class="field"><span>包装状态</span><input name="condition" maxlength="60" value="${esc(i.condition)}" placeholder="例如：未拆封 / 只有本体"></label>${TAG_GROUPS.map(tagEditor).join('')}<label class="field"><span>备注</span><textarea name="notes" maxlength="800" placeholder="款式、来源，或者其他需要记住的事">${esc(i.notes)}</textarea></label></form>`, {formId:'item-form',saveId:'save-item'});
+  openSheet(existing?'编辑物品':'添加物品',`<form id="item-form"><div id="form-error" class="inline-error" role="alert"></div>${photoPicker(i)}<label class="field"><span>名称 *</span><input name="name" value="${esc(i.name)}" placeholder="例如：旅行带回的海边冰箱贴" maxlength="80" required></label><label class="field"><span>物品类别</span><select name="category">${['冰箱贴','拉布布','其他'].map(c=>`<option ${i.category===c?'selected':''}>${c}</option>`).join('')}</select></label><div class="form-columns"><label class="field"><span>可送数量 *</span><input type="number" inputmode="numeric" min="0" max="9999" step="1" name="quantity" value="${i.quantity}" required></label><label class="field"><span>单位</span><input name="unit" maxlength="10" value="${esc(i.unit)}" placeholder="个 / 盒 / 套" required></label></div><label class="field"><span>存放位置</span><input name="location" maxlength="80" value="${esc(i.location)}" placeholder="例如：书房柜子第二层"></label><label class="field"><span>包装状态</span><input name="condition" maxlength="60" value="${esc(i.condition)}" placeholder="例如：未拆封 / 只有本体"></label><p class="tag-editor-help">点标签选择，再点一次即可从这件物品移除。</p>${TAG_GROUPS.map(tagEditor).join('')}<label class="field"><span>备注</span><textarea name="notes" maxlength="4000" placeholder="款式、来源，或者其他需要记住的事">${esc(i.notes)}</textarea></label></form>`, {formId:'item-form',saveId:'save-item'});
 }
 function giveForm(id) {
   const i=state.items.find(i=>i.id===id); if(!i || i.quantity===0)return;
@@ -149,7 +178,7 @@ function settings() {
   const backupControls=backupRaw===null?'':validBackup
     ? '<button class="secondary full" data-action="restore">恢复上一次替换前的清单</button>'
     : '<div class="tip-box">导入前的原始数据已保留，但暂时无法直接读取。可以导出保存，之后再检查。<button class="secondary full" data-action="export-backup-raw">导出导入前的原始数据</button></div>';
-  openSheet('设置与备份',`<div class="tip-box"><strong>试用版</strong><br>内置物品与图片都是示例；毛绒挂件图片为原创示意插画，并非商品实拍。</div><div class="settings-section"><h3>先筛选，再逛逛</h3><p>在“挑礼物”里选喜好、场合和心意分量。同一组内满足任一标签即可，不同组需同时满足。没找到合适的，点“清空 · 看全部”。物品标签可以在编辑时增删。</p></div><div class="settings-section"><h3>数据现在存在哪里？</h3><p>物品、照片和送出记录只保存在当前浏览器。两台安卓手机暂不同步。清理浏览器数据、更换设备或预览地址，都不会自动带走这份清单；可以先导出备份。</p></div><div class="settings-section"><h3>备份与迁移</h3><p>导出文件包含物品照片和送出记录。导入会替换当前清单，并保留导入前的数据供恢复。${storageError?'当前原始数据暂时无法读取；请先导出保存，再导入有效备份恢复。':''}</p><div class="button-row"><button class="primary" data-action="export">导出备份</button>${storageError?'<button class="secondary" data-action="export-raw">导出原始数据</button>':''}</div><label class="field" style="margin-top:14px"><span>选择备份文件导入</span><input type="file" id="import-file" accept=".json,application/json"></label>${backupControls}</div><div class="settings-section"><h3>接下来的完整版本</h3><p>重点是两个人共用一份清单、同步照片与数量、避免重复送出。是否需要朋友喜好档案，等实际试用后再决定。</p></div>`);
+  openSheet('设置与备份',`<div class="tip-box"><strong>试用版</strong><br>内置物品与图片都是示例；毛绒挂件图片为原创示意插画，并非商品实拍。</div><div class="settings-section"><h3>先筛选，再逛逛</h3><p>在“挑礼物”里选场景、关系和价值。同一组内满足任一标签即可，不同组需同时满足。没找到合适的，点“清空 · 看全部”。编辑物品时，再点一次已选标签即可从这件物品移除。</p></div><div class="settings-section"><h3>整理标签</h3><p>新增、修改或删除场景、关系和价值标签。旧版“场合”归入“场景”，“喜好”标签保留在物品备注中。</p><button class="secondary full" data-action="manage-tags">管理标签</button></div><div class="settings-section"><h3>数据现在存在哪里？</h3><p>物品、照片和送出记录只保存在当前浏览器。两台安卓手机暂不同步。清理浏览器数据、更换设备或预览地址，都不会自动带走这份清单；可以先导出备份。</p></div><div class="settings-section"><h3>备份与迁移</h3><p>导出文件包含物品照片和送出记录。导入会替换当前清单，并保留导入前的数据供恢复。${storageError?'当前原始数据暂时无法读取；请先导出保存，再导入有效备份恢复。':''}</p><div class="button-row"><button class="primary" data-action="export">导出备份</button>${storageError?'<button class="secondary" data-action="export-raw">导出原始数据</button>':''}</div><label class="field" style="margin-top:14px"><span>选择备份文件导入</span><input type="file" id="import-file" accept=".json,application/json"></label>${backupControls}</div><div class="settings-section"><h3>接下来的完整版本</h3><p>重点是两个人共用一份清单、同步照片与数量、避免重复送出。是否需要朋友喜好档案，等实际试用后再决定。</p></div>`);
   $('.sheet-body',sheet).insertAdjacentHTML('beforeend','<div class="settings-section"><h3>准备好试一试？</h3><p>可以从空柜子收录自己的物品，也可以重新载入示例。替换前会自动保留当前清单。</p><div class="button-row"><button class="secondary" data-action="start-empty">从空柜子开始</button><button class="secondary" data-action="reload-demo">重新载入示例</button></div></div>');
 }
 function resetConfirmation(mode) {
@@ -170,7 +199,7 @@ document.addEventListener('click',event=>{
   const action=b.dataset.action;if(!action)return;
   try {
     if(action==='filter-tag') {const list=filters.tags[b.dataset.group];const at=list.indexOf(b.dataset.tag);at<0?list.push(b.dataset.tag):list.splice(at,1);render();}
-    if(action==='clear-filters'){filters={search:'',category:'',tags:{interest:[],occasion:[],value:[]},includeEmpty:false};view='pick';render();toast('已清空筛选，看看所有可送物品');}
+    if(action==='clear-filters'){filters=emptyFilters();view='pick';render();toast('已清空筛选，看看所有可送物品');}
     if(action==='detail')detail(b.dataset.id);
     if(action==='edit')editItem(b.dataset.id);
     if(action==='add')editItem();
@@ -183,12 +212,21 @@ document.addEventListener('click',event=>{
     if(action==='category'){cabinetCategory=b.dataset.category;render();}
     if(action==='go-pick'){view='pick';render();window.scrollTo({top:0,behavior:'instant'});}
     if(action==='settings')settings();
+    if(action==='manage-tags')manageTags();
+    if(action==='rename-tag')renameTagForm(b.dataset.group,b.dataset.tag);
+    if(action==='delete-tag')deleteTagConfirmation(b.dataset.group,b.dataset.tag);
+    if(action==='confirm-delete-tag')saveTagChange(removeTag(state,b.dataset.group,b.dataset.tag),`已删除“${b.dataset.tag}”`);
+    if(action==='undo-tag-change'){
+      if(!tagUndo)return;
+      if(JSON.stringify(state)!==tagUndo.after){tagUndo=null;manageTags();throw new Error('清单已有其他更新，无法撤销这次标签修改。');}
+      save(tagUndo.before);tagUndo=null;manageTags();toast('已撤销标签修改');
+    }
     if(action==='start-empty')resetConfirmation('empty');
     if(action==='reload-demo')resetConfirmation('demo');
     if(action==='confirm-reset'){
       if(!pendingReset)return;
-      const next=pendingReset==='empty'?{schemaVersion:1,items:[],history:[]}:createDemoState();
-      filters={search:'',category:'',tags:{interest:[],occasion:[],value:[]},includeEmpty:false};cabinetSearch='';cabinetCategory='';view='pick';
+      const next=pendingReset==='empty'?{...createDemoState(),items:[],history:[]}:createDemoState();
+      filters=emptyFilters();cabinetSearch='';cabinetCategory='';view='pick';
       save(next,{backup:true,allowRecovery:true});closeSheet();window.scrollTo({top:0,behavior:'instant'});toast('礼物柜已就绪，原清单可以在右上角恢复');
     }
     if(action==='editor-tag') {const list=editorDraft.tags[b.dataset.group];const at=list.indexOf(b.dataset.tag);at<0?list.push(b.dataset.tag):list.splice(at,1);refreshTagGroup(b.dataset.group);}
@@ -254,12 +292,19 @@ async function compressPhoto(file){
   }catch(error){throw new Error(error.message?.includes('压缩')?error.message:'照片读取失败，请换一张照片。');}finally{URL.revokeObjectURL(url);}
 }
 document.addEventListener('submit',event=>{
-  if(!['item-form','give-form'].includes(event.target.id))return;
+  if(!['item-form','give-form','rename-tag-form'].includes(event.target.id) && !event.target.matches('.tag-add-form'))return;
   event.preventDefault();
   try{
     const form=event.target;const values=Object.fromEntries(new FormData(form));
-    if(form.id==='item-form'){
+    if(form.matches('.tag-add-form')){
+      saveTagChange(addTag(state,form.dataset.group,values.tag),`已添加“${String(values.tag).trim()}”`);
+    }else if(form.id==='rename-tag-form'){
+      const group=form.dataset.group,oldTag=form.dataset.tag,newTag=String(values.tag).trim();
+      if(newTag===oldTag){manageTags();return;}
+      saveTagChange(renameTag(state,group,oldTag,newTag),`已改名为“${newTag}”`,{group,oldTag,newTag});
+    }else if(form.id==='item-form'){
       if($('#save-item').disabled)return;
+      if(TAG_GROUPS.some(g=>editorDraft.tags[g.id].some(tag=>editorCatalogBase[g.id].includes(tag) && !state.tagCatalog[g.id].includes(tag))))throw new Error('选中的标签已在另一个窗口修改或删除，请重新打开物品后再编辑。');
       const current=state.items.find(i=>i.id===editorDraft.id);
       if(editorBase && JSON.stringify(current)!==editorBase)throw new Error('这个物品已在另一个窗口修改，请重新打开后编辑。');
       const item={...editorDraft,...values,quantity:Number(values.quantity)};

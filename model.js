@@ -1,11 +1,11 @@
 // Shared, dependency-free data rules for the family gift cabinet.
 export const TAG_GROUPS = Object.freeze([
-  Object.freeze({ id: 'interest', label: '喜好', options: Object.freeze(['旅行', '城市纪念', '潮玩', '可爱']) }),
-  Object.freeze({ id: 'occasion', label: '场合', options: Object.freeze(['生日', '见面小礼', '伴手礼', '感谢']) }),
-  Object.freeze({ id: 'value', label: '心意分量', options: Object.freeze(['小份心意', '精致礼物', '特别心意']) }),
+  Object.freeze({ id: 'scene', label: '场景', options: Object.freeze(['生日', '见面小礼', '伴手礼', '感谢']) }),
+  Object.freeze({ id: 'relationship', label: '关系', options: Object.freeze(['朋友', '家人', '同事', '长辈']) }),
+  Object.freeze({ id: 'value', label: '价值', options: Object.freeze(['小份心意', '精致礼物', '特别心意']) }),
 ]);
 
-export const LIMITS = Object.freeze({ items: 5000, history: 20000, quantity: 9999, photoCharacters: 2800000 });
+export const LIMITS = Object.freeze({ items: 5000, history: 20000, quantity: 9999, photoCharacters: 2800000, notes: 4000, catalogTagsPerGroup: 5000 });
 const CATEGORIES = ['冰箱贴', '拉布布', '其他'];
 const ART = ['magnet-travel', 'magnet-city', 'magnet-flower', 'toy-green', 'toy-pink', 'toy-cocoa'];
 const UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -56,12 +56,52 @@ function choice(value, options, label, fallback) {
   return result;
 }
 
+function tagList(value, label, maximum = 30) {
+  const selected = list(value === undefined ? [] : value, `${label}标签`, maximum);
+  return [...new Set(Array.from(selected, tag => string(tag, `${label}标签`, { maximum: 40, required: true })))];
+}
+
 function tags(value = {}) {
   record(value, '标签');
-  return Object.fromEntries(TAG_GROUPS.map(({ id, label }) => {
-    const selected = list(value[id] === undefined ? [] : value[id], `${label}标签`, 30);
-    return [id, [...new Set(Array.from(selected, tag => string(tag, `${label}标签`, { maximum: 40, required: true })))]];
-  }));
+  return Object.fromEntries(TAG_GROUPS.map(({ id, label }) => [id, tagList(value[id], label)]));
+}
+
+function tagCatalog(value = {}) {
+  record(value, '标签目录');
+  return Object.fromEntries(TAG_GROUPS.map(({ id, label }) => [id, tagList(value[id], label, LIMITS.catalogTagsPerGroup)]));
+}
+
+function addItemTagsToCatalog(catalog, items) {
+  for (const { id, label } of TAG_GROUPS) {
+    const values = new Set(catalog[id]);
+    for (const item of items) for (const tag of item.tags[id]) values.add(tag);
+    if (values.size > LIMITS.catalogTagsPerGroup) throw new Error(`${label}标签超过上限 ${LIMITS.catalogTagsPerGroup}`);
+    catalog[id] = [...values];
+  }
+  return catalog;
+}
+
+function groupFor(groupId) {
+  const group = TAG_GROUPS.find(({ id }) => id === groupId);
+  if (!group) throw new Error('标签分类无效');
+  return group;
+}
+
+function normalizedTag(value, group) {
+  return string(value, `${group.label}标签`, { maximum: 40, required: true });
+}
+
+function migrateV1Item(value) {
+  record(value, '物品');
+  const previousTags = value.tags === undefined ? {} : record(value.tags, '标签');
+  const interests = tagList(previousTags.interest, '原喜好');
+  const previousNotes = string(value.notes, '备注', { maximum: LIMITS.notes });
+  const notes = interests.length ? `${previousNotes}${previousNotes ? '\n\n' : ''}原喜好标签：${interests.join('、')}` : previousNotes;
+  return normalizeItem({
+    ...value,
+    notes,
+    tags: { scene: previousTags.occasion, relationship: [], value: previousTags.value },
+  });
 }
 
 function photo(value) {
@@ -114,7 +154,7 @@ function normalizeItem(value) {
     unit: string(value.unit, '单位', { required: true, maximum: 12, fallback: '件' }),
     location: string(value.location, '存放位置', { maximum: 120 }),
     condition: string(value.condition, '包装与成色', { maximum: 80 }),
-    notes: string(value.notes, '备注', { maximum: 2000 }),
+    notes: string(value.notes, '备注', { maximum: LIMITS.notes }),
     photo: photo(value.photo),
     art: choice(value.art, ART, '示意图类型', category === '拉布布' ? 'toy-green' : 'magnet-travel'),
     tags: tags(value.tags),
@@ -140,8 +180,9 @@ function normalizeHistory(value) {
 /** Validate an imported snapshot and return a fresh, allow-listed copy. */
 export function validateState(value) {
   record(value, '备份');
-  if (value.schemaVersion !== 1) throw new Error('备份版本不支持，请使用本应用导出的文件');
-  const items = Array.from(list(value.items, '物品列表', LIMITS.items), normalizeItem);
+  if (![1, 2].includes(value.schemaVersion)) throw new Error('备份版本不支持，请使用本应用导出的文件');
+  const isLegacy = value.schemaVersion === 1;
+  const items = Array.from(list(value.items, '物品列表', LIMITS.items), isLegacy ? migrateV1Item : normalizeItem);
   const history = Array.from(list(value.history, '送出记录', LIMITS.history), normalizeHistory);
   const itemIds = new Set(items.map(item => item.id));
   const allIds = new Set([...itemIds, ...history.map(entry => entry.id)]);
@@ -149,7 +190,47 @@ export function validateState(value) {
   for (const entry of history) {
     if (!itemIds.has(entry.itemId)) throw new Error(`送出记录“${entry.itemName}”关联的物品不存在`);
   }
-  return { schemaVersion: 1, items, history };
+  const catalog = isLegacy
+    ? Object.fromEntries(TAG_GROUPS.map(({ id, options }) => [id, [...options]]))
+    : tagCatalog(value.tagCatalog);
+  return { schemaVersion: 2, tagCatalog: addItemTagsToCatalog(catalog, items), items, history };
+}
+
+/** Add an available label without assigning it to any item. */
+export function addTag(state, groupId, tag) {
+  const group = groupFor(groupId);
+  const label = normalizedTag(tag, group);
+  const next = validateState(state);
+  if (next.tagCatalog[group.id].includes(label)) throw new Error('这个标签已经存在');
+  if (next.tagCatalog[group.id].length >= LIMITS.catalogTagsPerGroup) throw new Error(`${group.label}标签已达上限`);
+  next.tagCatalog[group.id].push(label);
+  return next;
+}
+
+/** Rename a catalog label and all of its item assignments together. */
+export function renameTag(state, groupId, oldTag, newTag) {
+  const group = groupFor(groupId);
+  const previous = normalizedTag(oldTag, group);
+  const replacement = normalizedTag(newTag, group);
+  const next = validateState(state);
+  const index = next.tagCatalog[group.id].indexOf(previous);
+  if (index < 0) throw new Error('找不到这个标签');
+  if (previous === replacement) throw new Error('新标签与原标签相同');
+  if (next.tagCatalog[group.id].includes(replacement)) throw new Error('这个标签已经存在');
+  next.tagCatalog[group.id][index] = replacement;
+  for (const item of next.items) item.tags[group.id] = item.tags[group.id].map(tag => tag === previous ? replacement : tag);
+  return next;
+}
+
+/** Remove a catalog label and its assignments while preserving the items. */
+export function removeTag(state, groupId, tag) {
+  const group = groupFor(groupId);
+  const label = normalizedTag(tag, group);
+  const next = validateState(state);
+  if (!next.tagCatalog[group.id].includes(label)) throw new Error('找不到这个标签');
+  next.tagCatalog[group.id] = next.tagCatalog[group.id].filter(value => value !== label);
+  for (const item of next.items) item.tags[group.id] = item.tags[group.id].filter(value => value !== label);
+  return next;
 }
 
 /** Same-group tags use OR; selections in different groups use AND. */
@@ -179,6 +260,7 @@ export function upsertItem(state, item) {
   const normalized = normalizeItem({ ...previous, ...item, id: itemId, createdAt: previous.createdAt });
   if (index < 0) next.items.push(normalized);
   else next.items[index] = normalized;
+  addItemTagsToCatalog(next.tagCatalog, [normalized]);
   return next;
 }
 
@@ -217,14 +299,19 @@ export function undoGift(state, historyId) {
 export function createDemoState() {
   const createdAt = '2026-10-18T00:00:00.000Z';
   const definitions = [
-    { id: 'demo-kyoto', name: '京都鸟居冰箱贴', category: '冰箱贴', quantity: 3, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '旅行时带回的小纪念，适合喜欢逛城市、收集纪念品的朋友。', art: 'magnet-travel', tags: { interest: ['旅行', '城市纪念'], occasion: ['伴手礼', '见面小礼'], value: ['小份心意'] } },
-    { id: 'demo-shanghai', name: '上海城市冰箱贴', category: '冰箱贴', quantity: 2, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，纸卡包装', notes: '一份轻巧的城市纪念，可以随手带去见朋友。', art: 'magnet-city', tags: { interest: ['城市纪念', '旅行'], occasion: ['见面小礼', '伴手礼'], value: ['小份心意'] } },
-    { id: 'demo-flower', name: '小雏菊冰箱贴', category: '冰箱贴', quantity: 1, unit: '枚', location: '书房 · 第二层抽屉', condition: '全新，独立纸盒', notes: '柔和的小花造型，适合喜欢可爱小物的朋友。', art: 'magnet-flower', tags: { interest: ['可爱'], occasion: ['感谢', '见面小礼'], value: ['小份心意'] } },
-    { id: 'demo-seaside', name: '海边旅行冰箱贴', category: '冰箱贴', quantity: 4, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '带有海边度假气息的小礼物。', art: 'magnet-travel', tags: { interest: ['旅行'], occasion: ['伴手礼', '见面小礼'], value: ['小份心意'] } },
-    { id: 'demo-night', name: '城市夜景冰箱贴套装', category: '冰箱贴', quantity: 1, unit: '套', location: '书房 · 礼物收纳盒', condition: '全新，礼盒未拆封', notes: '一套可以一起摆放的城市夜景，适合认真准备的小礼物。', art: 'magnet-city', tags: { interest: ['城市纪念', '旅行'], occasion: ['生日', '感谢'], value: ['精致礼物'] } },
-    { id: 'demo-green', name: '森林绿拉布布', category: '拉布布', quantity: 1, unit: '只', location: '书房 · 展示柜下层', condition: '未拆封，包装完整', notes: '适合喜欢潮玩和绿色系的朋友。', art: 'toy-green', tags: { interest: ['潮玩', '可爱'], occasion: ['生日', '感谢'], value: ['特别心意'] } },
-    { id: 'demo-pink', name: '樱花粉拉布布', category: '拉布布', quantity: 2, unit: '只', location: '书房 · 礼物收纳盒', condition: '全新，盒装', notes: '温柔的粉色，适合喜欢可爱挂件的朋友。', art: 'toy-pink', tags: { interest: ['可爱', '潮玩'], occasion: ['生日', '见面小礼'], value: ['精致礼物'] } },
-    { id: 'demo-cocoa', name: '可可拉布布', category: '拉布布', quantity: 1, unit: '只', location: '书房 · 展示柜下层', condition: '已拆盒，未使用，包装保留', notes: '送之前可以先确认朋友是否介意拆盒。', art: 'toy-cocoa', tags: { interest: ['潮玩'], occasion: ['生日', '感谢'], value: ['精致礼物'] } },
+    { id: 'demo-kyoto', name: '京都鸟居冰箱贴', category: '冰箱贴', quantity: 3, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '旅行时带回的小纪念，适合喜欢逛城市、收集纪念品的朋友。', art: 'magnet-travel', tags: { scene: ['伴手礼', '见面小礼'], relationship: ['朋友', '同事'], value: ['小份心意'] } },
+    { id: 'demo-shanghai', name: '上海城市冰箱贴', category: '冰箱贴', quantity: 2, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，纸卡包装', notes: '一份轻巧的城市纪念，可以随手带去见朋友。', art: 'magnet-city', tags: { scene: ['见面小礼', '伴手礼'], relationship: ['朋友', '同事'], value: ['小份心意'] } },
+    { id: 'demo-flower', name: '小雏菊冰箱贴', category: '冰箱贴', quantity: 1, unit: '枚', location: '书房 · 第二层抽屉', condition: '全新，独立纸盒', notes: '柔和的小花造型，适合喜欢可爱小物的朋友。', art: 'magnet-flower', tags: { scene: ['感谢', '见面小礼'], relationship: ['朋友', '家人'], value: ['小份心意'] } },
+    { id: 'demo-seaside', name: '海边旅行冰箱贴', category: '冰箱贴', quantity: 4, unit: '枚', location: '玄关柜 · 旅行纪念盒', condition: '全新，有独立小袋', notes: '带有海边度假气息的小礼物。', art: 'magnet-travel', tags: { scene: ['伴手礼', '见面小礼'], relationship: ['朋友', '家人', '同事'], value: ['小份心意'] } },
+    { id: 'demo-night', name: '城市夜景冰箱贴套装', category: '冰箱贴', quantity: 1, unit: '套', location: '书房 · 礼物收纳盒', condition: '全新，礼盒未拆封', notes: '一套可以一起摆放的城市夜景，适合认真准备的小礼物。', art: 'magnet-city', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '长辈'], value: ['精致礼物'] } },
+    { id: 'demo-green', name: '森林绿拉布布', category: '拉布布', quantity: 1, unit: '只', location: '书房 · 展示柜下层', condition: '未拆封，包装完整', notes: '适合喜欢潮玩和绿色系的朋友。', art: 'toy-green', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '家人'], value: ['特别心意'] } },
+    { id: 'demo-pink', name: '樱花粉拉布布', category: '拉布布', quantity: 2, unit: '只', location: '书房 · 礼物收纳盒', condition: '全新，盒装', notes: '温柔的粉色，适合喜欢可爱挂件的朋友。', art: 'toy-pink', tags: { scene: ['生日', '见面小礼'], relationship: ['朋友', '家人'], value: ['精致礼物'] } },
+    { id: 'demo-cocoa', name: '可可拉布布', category: '拉布布', quantity: 1, unit: '只', location: '书房 · 展示柜下层', condition: '已拆盒，未使用，包装保留', notes: '送之前可以先确认朋友是否介意拆盒。', art: 'toy-cocoa', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '同事'], value: ['精致礼物'] } },
   ];
-  return validateState({ schemaVersion: 1, items: definitions.map(item => ({ ...item, photo: null, createdAt })), history: [] });
+  return validateState({
+    schemaVersion: 2,
+    tagCatalog: Object.fromEntries(TAG_GROUPS.map(({ id, options }) => [id, [...options]])),
+    items: definitions.map(item => ({ ...item, photo: null, createdAt })),
+    history: [],
+  });
 }
