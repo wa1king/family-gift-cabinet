@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600" role="img" aria-labelledby="title desc">
+  <title id="title">复古城市冰箱贴示例插画</title><desc id="desc">浅米色背景上，一枚印有红砖小楼、钟塔和路面电车的复古方形冰箱贴。</desc>
+  <defs>
+    <radialGradient id="bg"><stop stop-color="#fff9ec"/><stop offset="1" stop-color="#eee4d4"/></radialGradient>
+    <linearGradient id="paper" x2=".8" y2="1"><stop stop-color="#fff4d5"/><stop offset="1" stop-color="#e9d5a9"/></linearGradient>
+    <linearGradient id="sky" x2="0" y2="1"><stop stop-color="#cbd9d1"/><stop offset="1" stop-color="#f4e5c7"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feGaussianBlur stdDeviation="14"/></filter>
+    <pattern id="brick" width="24" height="14" patternUnits="userSpaceOnUse"><path d="M0 0h24M0 14h24M12 0v7M0 7h24M0 7v7m24-7v7" stroke="#f5d2ad" stroke-width="1" opacity=".35"/></pattern>
+    <clipPath id="window"><rect x="148" y="143" width="304" height="288" rx="7"/></clipPath>
+  </defs>
+  <path fill="url(#bg)" d="M0 0h600v600H0z"/>
+  <ellipse cx="301" cy="467" rx="170" ry="23" fill="#765d45" opacity=".17" filter="url(#shadow)"/>
+  <g transform="rotate(7 300 292)">
+    <rect x="120" y="121" width="360" height="364" rx="23" fill="#987d55"/>
+    <rect x="120" y="111" width="360" height="364" rx="23" fill="url(#paper)" stroke="#c8ae7e" stroke-width="3"/>
+    <rect x="135" y="126" width="330" height="334" rx="12" fill="none" stroke="#9a8057" stroke-width="1.5"/>
+    <g clip-path="url(#window)">
+      <path fill="url(#sky)" d="M148 143h304v288H148z"/>
+      <circle cx="391" cy="192" r="29" fill="#edbd80" opacity=".8"/>
+      <path d="M164 204c17-15 29-13 42 0 10-13 26-13 37 0" fill="none" stroke="#fff6dc" stroke-width="12" stroke-linecap="round" opacity=".7"/>
+      <path d="M150 279h46v103h-46m246-115h58v115h-58" fill="#b4bca7"/>
+      <path d="M174 274h83v110h-83z" fill="#b36d54"/><path d="M174 274h83v110h-83z" fill="url(#brick)"/>
+      <path d="m168 273 47-39 48 39z" fill="#435e59"/><path d="m180 266 35-28 36 28" fill="none" stroke="#f7e7c6" stroke-width="3"/>
+      <path d="M191 287h14v26h-14m20-26h14v26h-14m20-26h13v26h-13M191 326h14v25h-14m20-25h14v25h-14m20-25h13v25h-13" fill="#f0d5a4"/>
+      <path d="M196 291h5v18h-5m20-18h5v18h-5m19-18h5v18h-5" fill="#556b61"/>
+      <path d="M284 242h55v140h-55z" fill="#e4c496" stroke="#aa8866" stroke-width="2"/>
+      <path d="M292 205h39v46h-39z" fill="#c7966f"/>
+      <path d="m283 206 28-37 28 37z" fill="#486960"/>
+      <path d="M311 163v12" stroke="#655b46" stroke-width="3"/><circle cx="311" cy="161" r="4" fill="#d2a653"/>
+      <circle cx="311" cy="226" r="15" fill="#fff0cb" stroke="#735f48" stroke-width="3"/>
+      <path d="M311 216v10l7 5" stroke="#735f48" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M296 262h10v24h-10m12-24h10v24h-10m3 16h-12v23h12m6-23h10v23h-10" fill="#627767"/>
+      <path d="M352 277h82v107h-82z" fill="#d89b74"/><path d="M352 277h82v107h-82z" fill="url(#brick)"/>
+      <path d="M348 269h90v10h-90z" fill="#e9d4a7"/>
+      <path d="M360 289h15v24h-15m25-24h15v24h-15m25-24h15v24h-15m-65 13h15v24h-15m25-24h15v24h-15m25-24h15v24h-15" fill="#6b7c68" stroke="#f7ddb2" stroke-width="3"/>
+      <path d="M148 381h304v50H148z" fill="#b9ad90"/><path d="M148 405h304m-304 13h304" stroke="#8f8d7b" stroke-width="2"/>
+      <path d="M223 359h140a10 10 0 0 1 10 10v34H213v-34a10 10 0 0 1 10-10z" fill="#3e7d73" stroke="#315e57" stroke-width="3"/>
+      <path d="M226 368h23v17h-23m29-17h23v17h-23m29-17h23v17h-23m29-17h23v17h-23m29-17h14v17h-14" fill="#f8e2b3"/>
+      <path d="M214 391h158" stroke="#d6b36e" stroke-width="5"/>
+      <circle cx="239" cy="404" r="7" fill="#4d5149"/><circle cx="347" cy="404" r="7" fill="#4d5149"/>
+      <path d="m282 359 19-18h34" stroke="#665e49" stroke-width="3" fill="none"/>
+    </g>
+    <text x="300" y="450" text-anchor="middle" font-family="Georgia,serif" font-size="18" font-weight="700" letter-spacing="4" fill="#6d654d">CITY MEMORIES</text>
+    <path d="M141 139v-8h8m302 0h8v8" fill="none" stroke="#fff9e6" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>

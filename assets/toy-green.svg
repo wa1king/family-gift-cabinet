@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600" role="img" aria-labelledby="title desc">
+  <title id="title">青苔绿毛绒小怪兽挂件示例插画</title><desc id="desc">原创青苔绿大耳朵小怪兽挂件，圆脸、奶油色面颊、两颗小牙与毛绒脚掌。</desc>
+  <defs>
+    <radialGradient id="bg"><stop stop-color="#fbfaf0"/><stop offset="1" stop-color="#e7eddf"/></radialGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2=".7" y2="1"><stop stop-color="#aec69a"/><stop offset=".55" stop-color="#8da978"/><stop offset="1" stop-color="#5f815b"/></linearGradient>
+    <linearGradient id="ear" x2="1" y2="1"><stop stop-color="#b7cbb1"/><stop offset="1" stop-color="#789576"/></linearGradient>
+    <radialGradient id="face" cx=".4" cy=".3"><stop stop-color="#fff0d8"/><stop offset="1" stop-color="#e7ccaa"/></radialGradient>
+    <linearGradient id="metal" x2="1" y2="1"><stop stop-color="#d7c8a7"/><stop offset=".4" stop-color="#fff8de"/><stop offset="1" stop-color="#a4916c"/></linearGradient>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="13"/></filter>
+  </defs>
+  <path fill="url(#bg)" d="M0 0h600v600H0z"/>
+  <ellipse cx="306" cy="487" rx="116" ry="20" fill="#4f614a" opacity=".18" filter="url(#shadow)"/>
+  <g transform="rotate(-5 300 310)">
+    <ellipse cx="312" cy="99" rx="26" ry="32" fill="none" stroke="#a08b67" stroke-width="10"/>
+    <ellipse cx="312" cy="96" rx="26" ry="32" fill="none" stroke="url(#metal)" stroke-width="7"/>
+    <path d="M310 125v37" stroke="#77926a" stroke-width="14" stroke-linecap="round"/>
+    <path d="M236 240c-27-27-63-78-47-108 14-24 43-10 67 21 18 23 29 48 31 67M322 220c13-37 37-78 64-85 33-7 36 27 18 62-11 21-32 41-48 55" fill="url(#fur)" stroke="#74916a" stroke-width="4"/>
+    <path d="M236 218c-19-24-36-54-30-65 6-8 22 6 34 23l24 42m73 2c17-33 36-59 48-61 10-1 6 16-5 34l-29 35" fill="url(#ear)" stroke="#c1d0ad" stroke-width="3" stroke-linecap="round"/>
+    <path d="M246 337c-33 6-51 28-49 62 2 16 13 18 27 4l22-25m110-42c35 6 55 26 53 59-1 19-16 23-29 6l-21-26" fill="url(#fur)" stroke="#739167" stroke-width="3"/>
+    <path d="M243 330c-14 29-22 62-15 95l-7 7 13 5-3 10 16 1c30 21 93 26 123-4l14-3-7-11 9-9-11-9c4-36-8-67-24-86z" fill="url(#fur)"/>
+    <ellipse cx="298" cy="397" rx="47" ry="43" fill="#b7c5a2" opacity=".7"/>
+    <path d="M253 429c-24-8-43 2-42 23 2 22 26 27 49 17 19-7 19-33-7-40m86 1c24-9 46 0 46 22 0 23-25 29-48 18-18-8-18-33 2-40" fill="url(#fur)" stroke="#708c63" stroke-width="3"/>
+    <ellipse cx="243" cy="453" rx="17" ry="12" fill="#c8d1b0"/><ellipse cx="355" cy="454" rx="17" ry="12" fill="#c8d1b0"/>
+    <path d="m222 439 2-8m9 5 1-9m127 8 1-8m10 12 2-8" stroke="#5e7c57" stroke-width="3" stroke-linecap="round" opacity=".6"/>
+    <path d="M192 279c-6-17 0-36 16-49l-5-10 16 1 2-13 14 5 8-14 12 6 10-13 12 9 17-9 10 9 18-9 10 10 16-6 10 12 15-3 6 13 16 1-1 13c22 18 28 42 18 62l8 11-14 7 3 14-15 4-3 13-17-1-7 13-14-4-12 10-13-6-14 7-13-6-16 5-10-9-16 1-8-10-17-1-3-14-14-3 3-13-13-8 7-12z" fill="url(#fur)" stroke="#7e9c70" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M218 282c0-49 41-68 82-68 48 0 84 25 85 69 0 48-33 73-82 73-48 0-85-25-85-74z" fill="url(#face)" stroke="#82966d" stroke-width="3"/>
+    <path d="M231 270c12-22 31-29 51-25m39 0c18-2 37 8 46 25" fill="none" stroke="#d7b996" stroke-width="3" opacity=".6" stroke-linecap="round"/>
+    <ellipse cx="262" cy="278" rx="13" ry="17" fill="#3e3933"/><ellipse cx="339" cy="278" rx="13" ry="17" fill="#3e3933"/>
+    <ellipse cx="258" cy="272" rx="4" ry="5" fill="#fff9ec"/><ellipse cx="335" cy="272" rx="4" ry="5" fill="#fff9ec"/>
+    <ellipse cx="301" cy="296" rx="8" ry="6" fill="#ad8871"/>
+    <path d="M265 312q35 29 73-1c-2 21-15 31-36 31-19 0-33-10-37-30z" fill="#805b4a"/>
+    <path d="m279 320 11 5-3 11-9-6zm34 5 11-5 2 10-10 6z" fill="#fff7e5"/>
+    <ellipse cx="243" cy="306" rx="12" ry="7" fill="#e9ad99" opacity=".65"/><ellipse cx="359" cy="306" rx="12" ry="7" fill="#e9ad99" opacity=".65"/>
+    <g stroke="#d1ddbb" stroke-width="3" stroke-linecap="round" opacity=".7" fill="none"><path d="m222 223 7-9m15-4 6-8m47-1 5-8m36 15 6-7m30 27 6-5m-173 45-7 5m-5 19-7 6m15 33-5 7m165-65 8 4m-1 27 7 5m-21 29 6 5m-128 40-8 7m-3 22-7 4m130-35 7 7m-1 27 5 7m-105 21 3 7m14 4 3 7m57-10-2 8"/></g>
+    <path d="m282 380 7 7m26-7-6 7m-14 17 7 6" fill="none" stroke="#e2e5c9" stroke-width="4" stroke-linecap="round"/>
+  </g>
+</svg>

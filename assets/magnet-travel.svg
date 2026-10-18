@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600" role="img" aria-labelledby="title desc">
+  <title id="title">山海旅行冰箱贴示例插画</title><desc id="desc">奶油色背景中，一枚有金色圆边、日落与青绿色山海图案的圆形冰箱贴。</desc>
+  <defs>
+    <radialGradient id="bg"><stop stop-color="#fffaf0"/><stop offset="1" stop-color="#f0e8d9"/></radialGradient>
+    <linearGradient id="rim" x2=".8" y2="1"><stop stop-color="#f5d69a"/><stop offset=".4" stop-color="#d8a967"/><stop offset=".65" stop-color="#f9e3b7"/><stop offset="1" stop-color="#ad7c42"/></linearGradient>
+    <linearGradient id="sky" x2="0" y2="1"><stop stop-color="#f4d8a0"/><stop offset=".7" stop-color="#ffedc4"/><stop offset="1" stop-color="#f1b58c"/></linearGradient>
+    <linearGradient id="sea" x2="0" y2="1"><stop stop-color="#55a4a2"/><stop offset="1" stop-color="#24656e"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feGaussianBlur stdDeviation="15"/></filter>
+    <clipPath id="disc"><circle cx="300" cy="285" r="171"/></clipPath>
+  </defs>
+  <path fill="url(#bg)" d="M0 0h600v600H0z"/>
+  <ellipse cx="308" cy="468" rx="163" ry="24" fill="#816c4d" opacity=".14" filter="url(#shadow)"/>
+  <g transform="rotate(-8 300 290)">
+    <circle cx="300" cy="296" r="188" fill="#9b7346"/>
+    <circle cx="300" cy="286" r="188" fill="url(#rim)"/>
+    <circle cx="300" cy="285" r="177" fill="#fff6d9"/>
+    <g clip-path="url(#disc)">
+      <path fill="url(#sky)" d="M110 100h380v350H110z"/>
+      <circle cx="350" cy="218" r="45" fill="#e8895d"/>
+      <circle cx="350" cy="218" r="36" fill="#f6a474"/>
+      <path d="m105 306 85-106 86 78 61-56 105 104 54 24v106H105z" fill="#5a8b83"/>
+      <path d="m105 330 85-130 16 60 24-11 46 29-72 54z" fill="#81aaa0"/>
+      <path d="m259 319 78-97 29 58 22-6 54 52 54 24v106H259z" fill="#3c777b"/>
+      <path d="m330 239 7-17 20 40-16-5-11 4-12-7z" fill="#d9dec4"/>
+      <path d="M110 337c68-14 104 19 163 10s102-20 217-8v129H110z" fill="url(#sea)"/>
+      <path d="M132 359c60-16 102 16 159 3s91-13 146-7M163 387c57-10 87 14 143 3s89-11 135-4M207 417c33-5 52 7 90 1s57-8 84-3" fill="none" stroke="#c4e0c7" stroke-width="5" stroke-linecap="round" opacity=".72"/>
+      <path d="M126 356c27-28 59-30 83-19l-11 14 26 3-12 18-42 7-48 20z" fill="#d4c39a"/>
+      <path d="M402 323c30-14 60-14 82-8v52l-34-11-19-17-36-4z" fill="#244f58"/>
+      <path d="m168 287 8-36 7 32m-20-8 18-10 13 9" stroke="#315e5a" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="m253 190 10-5 10 5m-38 15 7-4 7 4" stroke="#a27757" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <path d="M167 422a171 171 0 0 0 267-2" fill="none" stroke="#f4dcaa" stroke-width="39"/>
+      <text x="300" y="444" text-anchor="middle" font-family="Georgia,serif" font-weight="700" font-size="22" letter-spacing="6" fill="#53675d">SEA &amp; SKY</text>
+    </g>
+    <circle cx="300" cy="285" r="171" fill="none" stroke="#ba925d" stroke-width="2"/>
+    <path d="M173 173a179 179 0 0 1 207-45" fill="none" stroke="#fff9df" stroke-width="5" opacity=".8" stroke-linecap="round"/>
+    <path d="M139 329a178 178 0 0 0 99 118" fill="none" stroke="#b28148" stroke-width="3" opacity=".4" stroke-linecap="round"/>
+  </g>
+</svg>
