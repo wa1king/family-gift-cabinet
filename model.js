@@ -127,6 +127,15 @@ function photo(value) {
   return value;
 }
 
+// A private Storage object key, never a public or expiring download URL.
+function photoKey(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{64}\.(?:jpg|png|webp)$/.test(value)) {
+    throw new Error('云端照片编号无效');
+  }
+  return value;
+}
+
 function day(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('日期格式应为 YYYY-MM-DD');
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -170,6 +179,7 @@ function normalizeItem(value) {
     condition: string(value.condition, '包装与成色', { maximum: 80 }),
     notes: string(value.notes, '备注', { maximum: LIMITS.notes }),
     photo: photo(value.photo),
+    photoKey: photoKey(value.photoKey),
     art: choice(value.art, ART, '示意图类型', category === '拉布布' ? 'toy-green' : 'magnet-travel'),
     tags: tags(value.tags),
     createdAt: timestamp(value.createdAt, '录入时间'),
@@ -193,7 +203,7 @@ function normalizeHistory(value) {
 /** Validate an imported snapshot and return a fresh, allow-listed copy. */
 export function validateState(value) {
   record(value, '备份');
-  if (![1, 2, 3].includes(value.schemaVersion)) throw new Error('备份版本不支持，请使用本应用导出的文件');
+  if (![1, 2, 3, 4].includes(value.schemaVersion)) throw new Error('备份版本不支持，请使用本应用导出的文件');
   const isLegacy = value.schemaVersion === 1;
   const items = Array.from(list(value.items, '物品列表', LIMITS.items), isLegacy ? migrateV1Item : normalizeItem);
   const history = Array.from(list(value.history, '送出记录', LIMITS.history), normalizeHistory);
@@ -207,7 +217,7 @@ export function validateState(value) {
     ? Object.fromEntries(TAG_GROUPS.map(({ id, options }) => [id, [...options]]))
     : tagCatalog(value.tagCatalog);
   const categories = value.schemaVersion < 3 ? [...DEFAULT_CATEGORIES] : categoryList(value.categories);
-  return { schemaVersion: 3, categories: addItemCategories(categories, items), tagCatalog: addItemTagsToCatalog(catalog, items), items, history };
+  return { schemaVersion: 4, categories: addItemCategories(categories, items), tagCatalog: addItemTagsToCatalog(catalog, items), items, history };
 }
 
 /** Add an available item category without assigning it to any item. */
@@ -334,7 +344,7 @@ export function createDemoState() {
     { id: 'demo-cocoa', name: '可可拉布布', category: '拉布布', quantity: 1, location: '书房 · 展示柜下层', condition: '已拆盒，未使用，包装保留', notes: '送之前可以先确认朋友是否介意拆盒。', art: 'toy-cocoa', tags: { scene: ['生日', '感谢'], relationship: ['朋友', '同事'], value: ['精致礼物'] } },
   ];
   return validateState({
-    schemaVersion: 3,
+    schemaVersion: 4,
     categories: [...DEFAULT_CATEGORIES],
     tagCatalog: Object.fromEntries(TAG_GROUPS.map(({ id, options }) => [id, [...options]])),
     items: definitions.map(item => ({ ...item, photo: null, createdAt })),

@@ -1,4 +1,8 @@
-import { TAG_GROUPS, createDemoState, filterItems, giveItem, undoGift, validateState, upsertItem, addTag, renameTag, removeTag, addCategory } from './model.js?v=20261018-mobile';
+import { TAG_GROUPS, createDemoState, filterItems, giveItem, undoGift, validateState, upsertItem, addTag, renameTag, removeTag, addCategory } from './model.js?v=20261026-github';
+
+import { createGitHubClient } from './github.js?v=20261026-github';
+import { GITHUB_CONFIG } from './github-config.js?v=20261026-github';
+import { SyncStore } from './sync.js?v=20261026-github';
 
 const KEY = 'little-gift-cabinet-v1';
 const BACKUP_KEY = KEY + '-before-import';
@@ -8,7 +12,10 @@ const sheet = $('#sheet');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon = name => ({ pin:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2"/></svg>', search:'<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>' })[name] || '';
 const arts = ['magnet-travel','magnet-city','magnet-flower','toy-green','toy-pink','toy-cocoa'];
-const artFor = item => item.photo || `./assets/${arts.includes(item.art) ? item.art : item.category === '拉布布' ? 'toy-green' : 'magnet-travel'}.svg`;
+const photoUrls = new Map();
+const hasPhoto = item => Boolean(item.photo || item.photoKey);
+const photoAttributes = item => item.photoKey && !item.photo ? ` data-photo-key="${esc(item.photoKey)}"` : '';
+const artFor = item => item.photo || photoUrls.get(item.photoKey) || `./assets/${arts.includes(item.art) ? item.art : item.category === '拉布布' ? 'toy-green' : 'magnet-travel'}.svg`;
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const uid = () => globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let state, storageError = '', lastStored = null, pendingImport = null, editorDraft = null, editorBase = null, editorCatalogBase = null;
@@ -21,6 +28,11 @@ let toastTimer;
 let photoRequest = 0;
 let pendingReset = '';
 let tagUndo = null;
+let legacyState = null, cloudScreenError='', replacementRevision=null;
+let photoObserver = null;
+const photoRequests = new Set();
+const cloud = createGitHubClient(GITHUB_CONFIG);
+const sync = new SyncStore(cloud,onCloudChange);
 
 try {
   lastStored = localStorage.getItem(KEY);
@@ -30,12 +42,71 @@ try {
   storageError = '本机保存的数据暂时无法读取。为保护原数据，已暂停日常保存；可在右上角先导出原始数据，再导入有效备份恢复。当前仅展示示例。';
 }
 
+legacyState = lastStored && !storageError ? structuredClone(state) : null;
+
+function onCloudChange() {
+  if(sync.ready && sync.state){state=sync.state;storageError='';}
+  if(!sync.session)photoUrls.clear();
+  render();
+}
+function updateNav() {
+  document.querySelectorAll('[data-view]').forEach(button=>{
+    const active=button.dataset.view===view;
+    button.classList.toggle('active',active);
+    if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
+  });
+  $('[data-action="add"]').disabled=sync.enabled && (!sync.ready || !sync.session || sync.busy);
+}
+function cloudBanner() {
+  if(!sync.enabled || !sync.error)return '';
+  return '<div class="cloud-banner" role="status"><p>'+esc(sync.error)+'</p><button class="text-button" data-action="'+(sync.pending?'retry-cloud-save':'cloud-refresh')+'">'+(sync.pending?'确认上次保存':'重新同步')+'</button></div>';
+}
+function cloudGate() {
+  const error=cloudScreenError || sync.error;
+  const errorHtml=error?'<p class="page-error" role="alert">'+esc(error)+'</p>':'';
+  if(sync.loading)return '<section class="cloud-gate cloud-loading"><h1>正在连接礼物柜</h1><p>读取 GitHub 私有清单…</p></section>';
+  if(!sync.session)return `<section class="cloud-gate"><h1>连接家庭礼物柜</h1><p>两台手机连接同一个私有仓库，共用物品、照片和送出记录。</p>${errorHtml}<form id="cloud-auth-form"><label class="field"><span>GitHub 访问授权</span><input type="password" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="粘贴专用于礼物柜的授权" required></label><label class="remember-device"><input type="checkbox" name="remember"> 在这台私人设备上记住授权</label><p class="micro">不勾选时仅在本次浏览器会话保留授权；勾选后保存在当前浏览器，断开连接时移除。</p><button class="primary full" type="submit">连接</button></form><details class="connection-help"><summary>第一次连接？查看设置方法</summary><ol><li>打开 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">GitHub 授权设置</a>，创建 Fine-grained token。</li><li>Repository access 选 Only select repositories，仅选 <strong>family-gift-cabinet-data</strong>。</li><li>Repository permissions 中，将 Contents 设为 Read and write，其余保持默认。选合适的有效期。</li><li>生成后粘贴到上方。另一台手机使用同一仓库的专用授权即可。</li></ol><p>授权只能填在应用连接框里，请勿发到聊天或写入代码。令牌到期后重新生成并连接。</p></details></section>`;
+  if(sync.error)return '<section class="cloud-gate"><h1>暂时无法读取共享清单</h1>'+errorHtml+'<button class="primary full" data-action="'+(sync.pending?'retry-cloud-save':'cloud-refresh')+'">'+(sync.pending?'确认上次保存':'重新连接')+'</button><button class="text-button" data-action="cloud-signout">断开，重新填写授权</button></section>';
+  return '<section class="cloud-gate"><h1>开始共用礼物柜</h1><p>私有仓库已连接，还没有清单。创建后，另一台手机连接即可看到。</p>'+errorHtml+'<div class="cloud-migration-options">'+(legacyState?'<button class="primary full" data-action="cloud-migrate-local">迁移本机的 '+legacyState.items.length+' 款物品和 '+legacyState.history.length+' 条记录</button><p class="micro">包含本机照片，原本机数据仍保留。只有你主动选择后才上传。</p>':'')+'<button class="'+(legacyState?'secondary':'primary')+' full" data-action="cloud-start-empty">从空礼物柜开始</button></div><button class="text-button" data-action="cloud-signout">断开连接</button></section>';
+}
+function cloudAccountSettings() {
+  return '<section class="settings-section cloud-account"><h3>GitHub 共享清单</h3><p>'+esc(sync.session?.user.email || '尚未连接')+'</p><p>清单和照片保存在独立私有仓库。只有具备该仓库访问授权的设备可以读取。历史版本也保留在私有仓库中。</p><div class="cloud-account-actions">'+(sync.session?'<button class="secondary" data-action="cloud-refresh">立即同步</button><button class="text-button" data-action="cloud-signout">断开当前设备</button>':'<button class="text-button" data-action="close">去连接</button>')+'</div></section>';
+}
+function hydratePhotos() {
+  photoObserver?.disconnect();
+  if(!sync.enabled || !sync.session)return;
+  const load=async img=>{
+    const key=img.dataset.photoKey;
+    if(!key)return;
+    if(photoUrls.has(key)){img.src=photoUrls.get(key);return;}
+    if(photoRequests.has(key))return;
+    photoRequests.add(key);
+    try{
+      const url=await cloud.photoUrl(key);
+      photoUrls.set(key,url);
+      document.querySelectorAll('img[data-photo-key]').forEach(el=>{if(el.dataset.photoKey===key)el.src=url;});
+    }catch{if(img.isConnected)img.alt='照片暂时无法读取';}
+    finally{photoRequests.delete(key);}
+  };
+  const images=document.querySelectorAll('img[data-photo-key]');
+  if(typeof IntersectionObserver!=='function'){images.forEach(load);return;}
+  photoObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){photoObserver.unobserve(entry.target);load(entry.target);}}),{rootMargin:'150px'});
+  images.forEach(img=>photoObserver.observe(img));
+}
+async function bootstrapCloud() { await sync.start(); }
+
 function toast(message) {
   const el = $('#toast'); el.textContent = message; el.classList.add('show');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 3400);
 }
 
-function save(next, { backup = false, allowRecovery = false } = {}) {
+async function save(next, { backup = false, allowRecovery = false, expectedRevision } = {}) {
+  if(sync.enabled){
+    const enabled=Array.from(sheet.querySelectorAll('button,input,select,textarea')).filter(el=>!el.disabled);
+    enabled.forEach(el=>el.disabled=true);
+    try{return await sync.save(next,{expectedRevision});}
+    finally{enabled.forEach(el=>{if(el.isConnected)el.disabled=false;});}
+  }
   if (storageError && !allowRecovery) throw new Error('请先导出原始数据，再从右上角导入有效备份恢复；原数据没有被覆盖。');
   const clean = validateState(next);
   const serialized = JSON.stringify(clean);
@@ -75,20 +146,20 @@ function chip(group, value, active, context = 'filter') {
   return `<button type="button" class="chip${active ? ' selected' : ''}" data-action="${context}-tag" data-group="${group}" data-tag="${esc(value)}" aria-pressed="${active}">${esc(value)}</button>`;
 }
 function cards(items) {
-  return `<div class="gift-grid">${items.map(i => `<article class="gift-card"><button class="card-hit" data-action="detail" data-id="${esc(i.id)}" aria-label="查看${esc(i.name)}，剩余${i.quantity}"><div class="card-art"><img src="${esc(artFor(i))}" alt="${esc(i.name)}${i.photo ? '' : '示意插画'}" loading="lazy"><span class="quantity-badge">${i.quantity ? `${i.quantity}` : '已送完'}</span></div><div class="card-content"><h3>${esc(i.name)}</h3><p class="card-location">${icon('pin')}${esc(i.location || '未填写位置')}</p><div class="card-tags">${TAG_GROUPS.flatMap(g=>i.tags[g.id]).slice(0,2).map(t=>`<span class="mini-tag">${esc(t)}</span>`).join('')}</div></div></button></article>`).join('')}</div>`;
+  return `<div class="gift-grid">${items.map(i => `<article class="gift-card"><button class="card-hit" data-action="detail" data-id="${esc(i.id)}" aria-label="查看${esc(i.name)}，剩余${i.quantity}"><div class="card-art"><img${photoAttributes(i)} src="${esc(artFor(i))}" alt="${esc(i.name)}${hasPhoto(i) ? '' : '示意插画'}" loading="lazy"><span class="quantity-badge">${i.quantity ? `${i.quantity}` : '已送完'}</span></div><div class="card-content"><h3>${esc(i.name)}</h3><p class="card-location">${icon('pin')}${esc(i.location || '未填写位置')}</p><div class="card-tags">${TAG_GROUPS.flatMap(g=>i.tags[g.id]).slice(0,2).map(t=>`<span class="mini-tag">${esc(t)}</span>`).join('')}</div></div></button></article>`).join('')}</div>`;
 }
 
 function empty(title, description, action, label) {
   return `<div class="empty-state"><div class="empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9h18v4H3zM5 13v8h14v-8M12 9v12M12 9H7.5a3 3 0 1 1 3-3L12 9Zm0 0h4.5a3 3 0 1 0-3-3L12 9Z"/></svg></div><h3>${title}</h3><p>${description}</p><button class="primary" data-action="${action}">${label}</button></div>`;
 }
-const notice = () => '<p class="demo-notice">示例物品 · 数据仅保存在当前设备</p>';
+const notice = () => sync.enabled?'':'<p class="demo-notice">数据仅保存在当前设备</p>';
 const chevron = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>';
 function hasFilters() { return Boolean(filters.search || filters.category || selectedCount() || filters.includeEmpty); }
 function filteredItems() { return filterItems(state.items,filters); }
 function resultCount(matches) { return filters.includeEmpty ? matches.length+' 款物品' : matches.length+' 款可送'; }
 function cabinet() {
   const matches=filteredItems();
-  return `<section class="cabinet-heading"><h1>礼物柜</h1><span class="micro" id="result-count">${resultCount(matches)}</span><button class="text-button" id="clear-all" data-action="clear-filters" ${hasFilters()?'':'hidden'}>清空</button></section>
+  return `<section class="cabinet-heading"><h1>礼物柜</h1><span class="micro" id="result-count">${resultCount(matches)}</span>${sync.enabled?`<span class="cloud-status${sync.error?' error':''}">${sync.busy?'同步中':sync.error?'待同步':'已同步'}</span>`:''}<button class="text-button" id="clear-all" data-action="clear-filters" ${hasFilters()?'':'hidden'}>清空</button></section>
     <label class="cabinet-search">${icon('search')}<input type="search" id="cabinet-search" value="${esc(filters.search)}" placeholder="搜索物品" aria-label="搜索物品"></label>
     <div class="filter-bar" aria-label="筛选礼物"><button class="filter-trigger${filters.category || filters.includeEmpty?' is-active':''}" data-action="open-category-filter" aria-label="物品类别筛选，当前${esc(filters.category || '全部类别')}" aria-expanded="${activeFilter==='category'}"><span>${esc(filters.category || '类别')}</span>${chevron}</button>${TAG_GROUPS.map(g=>`<button class="filter-trigger${filters.tags[g.id].length?' is-active':''}" data-action="open-filter" data-group="${g.id}" aria-label="${esc(g.label)}筛选，${filters.tags[g.id].length?'已选'+filters.tags[g.id].length+'项':'不限'}" aria-expanded="${activeFilter===g.id}"><span>${esc(g.label)}</span>${filters.tags[g.id].length?`<small>${filters.tags[g.id].length}</small>`:''}${chevron}</button>`).join('')}</div>
     <div class="cabinet-results" id="cabinet-results">${cabinetResults(matches)}</div>${notice()}`;
@@ -106,12 +177,13 @@ function openCategoryFilter() {
   openSheet('类别筛选',`<div class="category-options">${['',...state.categories].map(c=>`<button class="filter-category-option" data-action="category" data-category="${esc(c)}" aria-pressed="${filters.category===c}"><span>${esc(c || '全部类别')}</span><span aria-hidden="true">${filters.category===c?'✓':''}</span></button>`).join('')}</div><label class="inventory-toggle"><input type="checkbox" id="include-empty" ${filters.includeEmpty?'checked':''}>显示已送完的物品</label><button class="primary full" data-action="close">完成</button>`);
 }
 function history() {
-  return `<section class="view-intro"><h1>送出记录</h1><p>查看收礼人、日期和数量</p></section>${state.history.length ? `<div class="history-list">${[...state.history].reverse().map(h=>{const i=state.items.find(i=>i.id===h.itemId);return `<article class="history-card"><img src="${esc(artFor(i || {}))}" alt="${esc(h.itemName)}"><div class="record"><h3>${esc(h.itemName)} × ${h.quantity}</h3><p>送给 ${esc(h.recipient)}${h.note?`<br><span class="record-note">${esc(h.note)}</span>`:''}</p><div class="record-footer"><time datetime="${esc(h.date)}">${esc(h.date)}</time><button class="text-button" data-action="undo" data-id="${esc(h.id)}">撤销，放回柜子</button></div></div></article>`;}).join('')}</div>` : empty('还没有送出记录','在物品详情中记录送出后，会显示在这里。','go-pick','查看礼物柜')}`;
+  return `<section class="view-intro"><h1>送出记录</h1><p>查看收礼人、日期和数量</p></section>${state.history.length ? `<div class="history-list">${[...state.history].reverse().map(h=>{const i=state.items.find(i=>i.id===h.itemId);return `<article class="history-card"><img${photoAttributes(i || {})} src="${esc(artFor(i || {}))}" alt="${esc(h.itemName)}"><div class="record"><h3>${esc(h.itemName)} × ${h.quantity}</h3><p>送给 ${esc(h.recipient)}${h.note?`<br><span class="record-note">${esc(h.note)}</span>`:''}</p><div class="record-footer"><time datetime="${esc(h.date)}">${esc(h.date)}</time><button class="text-button" data-action="undo" data-id="${esc(h.id)}">撤销，放回柜子</button></div></div></article>`;}).join('')}</div>` : empty('还没有送出记录','在物品详情中记录送出后，会显示在这里。','go-pick','查看礼物柜')}`;
 }
 function render() {
   TAG_GROUPS.forEach(g=>{filters.tags[g.id]=filters.tags[g.id].filter(t=>state.tagCatalog[g.id].includes(t));});
-  main.innerHTML = (storageError ? `<div class="page-error">${esc(storageError)}</div>`:'') + (view==='cabinet' ? cabinet() : history());
-  document.querySelectorAll('[data-view]').forEach(b=>{ const on = b.dataset.view===view; b.classList.toggle('active',on); if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current'); });
+  if(sync.enabled && (!sync.session || !sync.ready)){main.innerHTML=cloudGate();updateNav();return;}
+  main.innerHTML = cloudBanner() + (storageError ? `<div class="page-error">${esc(storageError)}</div>`:'') + (view==='cabinet' ? cabinet() : history());
+  updateNav();hydratePhotos();
 }
 function openSheet(title, body, { formId = '', saveId = '', cancelAction = 'close' } = {}) {
   const header = formId
@@ -119,15 +191,15 @@ function openSheet(title, body, { formId = '', saveId = '', cancelAction = 'clos
     : `<div class="sheet-head"><h2 id="sheet-title">${esc(title)}</h2><button class="close-button" data-action="close" aria-label="关闭">×</button></div>`;
   $('#sheet-content').innerHTML = `${header}<div class="sheet-body">${body}</div>`;
   if(!sheet.open) sheet.showModal();
-  sheet.scrollTop = 0;
+  sheet.scrollTop = 0;hydratePhotos();
 }
 function clearSheetState() { editorDraft=null; editorBase=null; editorCatalogBase=null; pendingImport=null; pendingReset=''; activeFilter=''; editorCategories=[]; photoRequest+=1; }
-function closeSheet() { const filtering=Boolean(activeFilter);sheet.close();clearSheetState();if(filtering)render(); }
-function fieldError(message) { const el = $('#form-error',sheet); if(el){el.textContent=message;el.classList.add('visible');el.scrollIntoView({block:'nearest'});}else toast(message); }
+function closeSheet() { if(sync.busy){toast('正在同步，请稍候');return;}const filtering=Boolean(activeFilter);sheet.close();clearSheetState();if(filtering)render(); }
+function fieldError(message) { const el = $('#form-error',sheet); if(el){el.textContent=message;if(sync.pending)el.insertAdjacentHTML('beforeend','<button type="button" class="text-button" data-action="retry-cloud-save">确认上次保存</button>');el.classList.add('visible');el.scrollIntoView({block:'nearest'});}else toast(message); }
 function detail(id) {
   const i = state.items.find(i=>i.id===id); if(!i)return;
   editorDraft=null;
-  openSheet('物品详情',`<img class="detail-image" src="${esc(artFor(i))}" alt="${esc(i.name)}${i.photo?'':'示意插画'}"><p class="detail-category">${esc(i.category)}${i.photo?'':' · 示例插画'}</p><h3 class="detail-name">${esc(i.name)}</h3><dl class="detail-meta"><div><dt>剩余数量</dt><dd>${i.quantity}</dd></div><div><dt>放在哪里</dt><dd>${esc(i.location || '未填写')}</dd></div><div><dt>包装状态</dt><dd>${esc(i.condition || '未填写')}</dd></div><div><dt>价值</dt><dd>${esc(i.tags.value.join('、') || '未填写')}</dd></div></dl>${TAG_GROUPS.filter(g=>g.id!=='value').map(g=>`<div class="detail-group"><h3>${esc(g.label)}</h3><div class="chips">${i.tags[g.id].length?i.tags[g.id].map(t=>`<span class="chip">${esc(t)}</span>`).join(''):'<span class="micro">还没加标签</span>'}</div></div>`).join('')}${i.notes?`<div class="detail-group"><h3>备注</h3><p>${esc(i.notes)}</p></div>`:''}<div class="button-row"><button class="secondary" data-action="edit" data-id="${esc(i.id)}">编辑物品</button><button class="primary" data-action="give" data-id="${esc(i.id)}" ${i.quantity===0?'disabled':''}>${i.quantity===0?'已经送完':'记录送出'}</button></div>`);
+  openSheet('物品详情',`<img${photoAttributes(i)} class="detail-image" src="${esc(artFor(i))}" alt="${esc(i.name)}${hasPhoto(i)?'':'示意插画'}"><p class="detail-category">${esc(i.category)}${hasPhoto(i)?'':' · 示例插画'}</p><h3 class="detail-name">${esc(i.name)}</h3><dl class="detail-meta"><div><dt>剩余数量</dt><dd>${i.quantity}</dd></div><div><dt>放在哪里</dt><dd>${esc(i.location || '未填写')}</dd></div><div><dt>包装状态</dt><dd>${esc(i.condition || '未填写')}</dd></div><div><dt>价值</dt><dd>${esc(i.tags.value.join('、') || '未填写')}</dd></div></dl>${TAG_GROUPS.filter(g=>g.id!=='value').map(g=>`<div class="detail-group"><h3>${esc(g.label)}</h3><div class="chips">${i.tags[g.id].length?i.tags[g.id].map(t=>`<span class="chip">${esc(t)}</span>`).join(''):'<span class="micro">还没加标签</span>'}</div></div>`).join('')}${i.notes?`<div class="detail-group"><h3>备注</h3><p>${esc(i.notes)}</p></div>`:''}<div class="button-row"><button class="secondary" data-action="edit" data-id="${esc(i.id)}">编辑物品</button><button class="primary" data-action="give" data-id="${esc(i.id)}" ${i.quantity===0?'disabled':''}>${i.quantity===0?'已经送完':'记录送出'}</button></div>`);
 }
 function tagEditor(group) {
   return `<div class="form-tags" data-tag-editor="${group.id}"><div class="tag-group-head"><span class="form-group-title">${esc(group.label)}</span><button type="button" class="add-inline" data-action="show-inline" data-target="custom-row-${group.id}" aria-expanded="false">＋ 新增</button></div><div class="chips" id="editor-tags-${group.id}">${availableTags(group).map(t=>chip(group.id,t,editorDraft.tags[group.id].includes(t),'editor')).join('')}</div><div class="inline-create" id="custom-row-${group.id}" hidden><input id="custom-${group.id}" maxlength="40" placeholder="新标签名称" aria-label="添加${esc(group.label)}标签"><button type="button" class="add-inline" data-action="custom-tag" data-group="${group.id}">确认</button><button type="button" class="add-inline" data-action="hide-inline" data-target="custom-row-${group.id}">取消</button></div></div>`;
@@ -137,10 +209,10 @@ function manageTags() {
   editorDraft=null;activeFilter='';render();
   openSheet('管理标签',`<div id="form-error" class="inline-error" role="alert"></div><p class="tag-manager-help">改名会同步到所有物品；删除标签会同时从物品中移除。</p>${tagUndo?`<div class="tag-undo" role="status"><span>${esc(tagUndo.message)}</span><button class="text-button" data-action="undo-tag-change">撤销</button></div>`:''}${TAG_GROUPS.map(g=>`<section class="tag-manager-group" aria-label="管理${esc(g.label)}标签"><div class="tag-group-head"><h3>${esc(g.label)}</h3><button type="button" class="add-inline" data-action="show-inline" data-target="tag-add-${g.id}" aria-expanded="false">＋ 新增</button></div><div class="tag-list">${state.tagCatalog[g.id].length?state.tagCatalog[g.id].map(tag=>`<div class="tag-row"><div class="tag-row-copy"><span>${esc(tag)}</span><small>${tagUsage(g.id,tag)} 款物品</small></div><button class="text-button" data-action="rename-tag" data-group="${g.id}" data-tag="${esc(tag)}" aria-label="修改${esc(g.label)}标签：${esc(tag)}">修改</button><button class="text-button danger-text" data-action="delete-tag" data-group="${g.id}" data-tag="${esc(tag)}" aria-label="删除${esc(g.label)}标签：${esc(tag)}">删除</button></div>`).join(''):'<p class="tag-list-empty">还没有标签，点“新增”添加</p>'}</div><form class="tag-add-form" id="tag-add-${g.id}" data-group="${g.id}" hidden><input name="tag" maxlength="40" placeholder="新标签名称" aria-label="新增${esc(g.label)}标签" required><button class="add-inline" type="submit">确认</button><button class="add-inline" type="button" data-action="hide-inline" data-target="tag-add-${g.id}">取消</button></form></section>`).join('')}`);
 }
-function saveTagChange(next, message, {group, oldTag, newTag} = {}) {
+async function saveTagChange(next, message, {group, oldTag, newTag} = {}) {
   const before=state;
   const wasSelected=group && filters.tags[group].includes(oldTag);
-  save(next);
+  await save(next);
   if(wasSelected && newTag){filters.tags[group].push(newTag);render();}
   tagUndo={before,after:JSON.stringify(state),message};
   manageTags();
@@ -156,12 +228,12 @@ function deleteTagConfirmation(group, tag) {
   openSheet('删除标签',`<div id="form-error" class="inline-error" role="alert"></div><p class="tag-delete-title">删除“${esc(tag)}”？</p><p class="tag-manager-help">将从${esc(definition.label)}选项和 ${tagUsage(group,tag)} 款物品中移除这个标签。物品、照片、数量和送出记录都会保留。</p><div class="button-row"><button class="secondary" data-action="manage-tags">保留标签</button><button class="danger-button" data-action="confirm-delete-tag" data-group="${group}" data-tag="${esc(tag)}">删除标签</button></div>`);
 }
 function photoPicker(item) {
-  return `<div class="photo-uploader"><img id="photo-preview" class="photo-thumb" src="${esc(artFor(item))}" alt="物品照片预览"><div class="photo-copy"><p class="photo-title">${item.photo?'更换物品照片':'添加物品照片'}</p><p id="photo-status" role="status" aria-live="polite">可拍照或从相册选择</p></div><div class="photo-actions" role="group" aria-label="选择照片来源"><button type="button" class="photo-source" data-action="photo-camera" aria-controls="item-photo-camera"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="3.5"/></svg><span>拍照</span></button><button type="button" class="photo-source" data-action="photo-album" aria-controls="item-photo-album"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg><span>从相册选择</span></button></div><input type="file" id="item-photo-camera" accept="image/*" capture="environment" hidden tabindex="-1"><input type="file" id="item-photo-album" accept="image/*" hidden tabindex="-1"></div>`;
+  return `<div class="photo-uploader"><img${photoAttributes(item)} id="photo-preview" class="photo-thumb" src="${esc(artFor(item))}" alt="物品照片预览"><div class="photo-copy"><p class="photo-title">${hasPhoto(item)?'更换物品照片':'添加物品照片'}</p><p id="photo-status" role="status" aria-live="polite">可拍照或从相册选择</p></div><div class="photo-actions" role="group" aria-label="选择照片来源"><button type="button" class="photo-source" data-action="photo-camera" aria-controls="item-photo-camera"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="3.5"/></svg><span>拍照</span></button><button type="button" class="photo-source" data-action="photo-album" aria-controls="item-photo-album"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg><span>从相册选择</span></button></div><input type="file" id="item-photo-camera" accept="image/*" capture="environment" hidden tabindex="-1"><input type="file" id="item-photo-album" accept="image/*" hidden tabindex="-1"></div>`;
 }
 function editItem(id) {
   const existing=state.items.find(i=>i.id===id);
   editorCategories=[...state.categories];
-  editorDraft=existing?structuredClone(existing):{id:uid(),name:'',category:editorCategories[0] || '其他',quantity:1,location:'',condition:'',notes:'',photo:null,art:'magnet-travel',tags:emptyTags(),createdAt:new Date().toISOString()};
+  editorDraft=existing?structuredClone(existing):{id:uid(),name:'',category:editorCategories[0] || '其他',quantity:1,location:'',condition:'',notes:'',photo:null,photoKey:null,art:'magnet-travel',tags:emptyTags(),createdAt:new Date().toISOString()};
   if(!editorCategories.includes(editorDraft.category))editorCategories.push(editorDraft.category);
   editorBase=existing?JSON.stringify(existing):null;
   editorCatalogBase=structuredClone(state.tagCatalog);
@@ -195,7 +267,7 @@ function confirmCategory() {
 function giveForm(id) {
   const i=state.items.find(i=>i.id===id); if(!i || i.quantity===0)return;
   editorDraft=null;
-  openSheet('记录送出',`<form id="give-form" data-id="${esc(i.id)}"><div id="form-error" class="inline-error" role="alert"></div><div class="gift-summary"><img src="${esc(artFor(i))}" alt="${esc(i.name)}"><div><h3>${esc(i.name)}</h3><p>柜子里还剩 ${i.quantity}</p></div></div><label class="field"><span>收礼人 *</span><input name="recipient" maxlength="60" placeholder="写个名字或称呼就好" required></label><div class="form-columns"><label class="field"><span>送出数量 *</span><input type="number" inputmode="numeric" name="quantity" min="1" max="${i.quantity}" step="1" value="1" required></label><label class="field"><span>送出日期 *</span><input type="date" name="date" value="${today()}" required></label></div><label class="field"><span>备注</span><textarea name="note" maxlength="800" placeholder="例如：生日见面时带给她"></textarea></label><div class="tip-box">保存后会扣除送出的数量。记错了，可以在“送出记录”里撤销并放回柜子。</div></form>`, {formId:'give-form'});
+  openSheet('记录送出',`<form id="give-form" data-id="${esc(i.id)}" data-base="${esc(JSON.stringify(i))}"><div id="form-error" class="inline-error" role="alert"></div><div class="gift-summary"><img${photoAttributes(i)} src="${esc(artFor(i))}" alt="${esc(i.name)}"><div><h3>${esc(i.name)}</h3><p>柜子里还剩 ${i.quantity}</p></div></div><label class="field"><span>收礼人 *</span><input name="recipient" maxlength="60" placeholder="写个名字或称呼就好" required></label><div class="form-columns"><label class="field"><span>送出数量 *</span><input type="number" inputmode="numeric" name="quantity" min="1" max="${i.quantity}" step="1" value="1" required></label><label class="field"><span>送出日期 *</span><input type="date" name="date" value="${today()}" required></label></div><label class="field"><span>备注</span><textarea name="note" maxlength="800" placeholder="例如：生日见面时带给她"></textarea></label><div class="tip-box">保存后会扣除送出的数量。记错了，可以在“送出记录”里撤销并放回柜子。</div></form>`, {formId:'give-form'});
 }
 function download(content,name) {
   const url=URL.createObjectURL(new Blob([content],{type:'application/json;charset=utf-8'}));
@@ -203,31 +275,33 @@ function download(content,name) {
 }
 function settings() {
   editorDraft=null; pendingImport=null;
+  if(sync.enabled && !sync.ready){openSheet('家庭账号',cloudAccountSettings()+(lastStored?'<button class="secondary full" data-action="export-raw">导出本机原始数据</button>':''));return;}
   let backupRaw=null, validBackup=false;
   try {
     backupRaw=localStorage.getItem(BACKUP_KEY);
     if(backupRaw!==null)try{validateState(JSON.parse(backupRaw));validBackup=true;}catch{}
   }catch{}
-  const backupControls=backupRaw===null?'':validBackup
+  const backupControls=sync.enabled?'<button class="secondary full" data-action="cloud-previous">恢复上一版云端清单</button>':backupRaw===null?'':validBackup
     ? '<button class="secondary full" data-action="restore">恢复上一次替换前的清单</button>'
     : '<div class="tip-box">导入前的原始数据已保留，但暂时无法直接读取。可以导出保存，之后再检查。<button class="secondary full" data-action="export-backup-raw">导出导入前的原始数据</button></div>';
-  openSheet('设置与备份',`<div class="tip-box"><strong>试用版</strong><br>内置物品与图片都是示例；毛绒挂件图片为原创示意插画，并非商品实拍。</div><div class="settings-section"><h3>先筛选，再逛逛</h3><p>在礼物柜上方点开场景、关系或价值，选择筛选条件。同一组内满足任一标签即可，不同组需同时满足。没找到合适的，点“清空筛选”。编辑物品时，再点一次已选标签即可从这件物品移除。</p></div><div class="settings-section"><h3>整理标签</h3><p>新增、修改或删除场景、关系和价值标签。旧版“场合”归入“场景”，“喜好”标签保留在物品备注中。</p><button class="secondary full" data-action="manage-tags">管理标签</button></div><div class="settings-section"><h3>数据现在存在哪里？</h3><p>物品、照片和送出记录只保存在当前浏览器。两台安卓手机暂不同步。清理浏览器数据、更换设备或预览地址，都不会自动带走这份清单；可以先导出备份。</p></div><div class="settings-section"><h3>备份与迁移</h3><p>导出文件包含物品照片和送出记录。导入会替换当前清单，并保留导入前的数据供恢复。${storageError?'当前原始数据暂时无法读取；请先导出保存，再导入有效备份恢复。':''}</p><div class="button-row"><button class="primary" data-action="export">导出备份</button>${storageError?'<button class="secondary" data-action="export-raw">导出原始数据</button>':''}</div><label class="field" style="margin-top:14px"><span>选择备份文件导入</span><input type="file" id="import-file" accept=".json,application/json"></label>${backupControls}</div><div class="settings-section"><h3>接下来的完整版本</h3><p>重点是两个人共用一份清单、同步照片与数量、避免重复送出。是否需要朋友喜好档案，等实际试用后再决定。</p></div>`);
+  openSheet('设置与备份',`<div class="tip-box"><strong>试用版</strong><br>内置物品与图片都是示例；毛绒挂件图片为原创示意插画，并非商品实拍。</div><div class="settings-section"><h3>先筛选，再逛逛</h3><p>在礼物柜上方点开场景、关系或价值，选择筛选条件。同一组内满足任一标签即可，不同组需同时满足。没找到合适的，点“清空筛选”。编辑物品时，再点一次已选标签即可从这件物品移除。</p></div><div class="settings-section"><h3>整理标签</h3><p>新增、修改或删除场景、关系和价值标签。旧版“场合”归入“场景”，“喜好”标签保留在物品备注中。</p><button class="secondary full" data-action="manage-tags">管理标签</button></div>${sync.enabled?cloudAccountSettings():`<div class="settings-section"><h3>数据现在存在哪里？</h3><p>物品、照片和送出记录只保存在当前浏览器。清理浏览器数据前，请先导出备份。</p></div>`}<div class="settings-section"><h3>备份与迁移</h3><p>导出文件包含物品照片和送出记录。导入会替换当前清单，并保留替换前的版本供恢复。${storageError?'当前原始数据暂时无法读取；请先导出保存，再导入有效备份恢复。':''}</p><div class="button-row"><button class="primary" data-action="export">导出备份</button>${storageError?'<button class="secondary" data-action="export-raw">导出原始数据</button>':''}</div><label class="field" style="margin-top:14px"><span>选择备份文件导入</span><input type="file" id="import-file" accept=".json,application/json"></label>${backupControls}</div>`);
   $('.sheet-body',sheet).insertAdjacentHTML('beforeend','<div class="settings-section"><h3>准备好试一试？</h3><p>可以从空柜子收录自己的物品，也可以重新载入示例。替换前会自动保留当前清单。</p><div class="button-row"><button class="secondary" data-action="start-empty">从空柜子开始</button><button class="secondary" data-action="reload-demo">重新载入示例</button></div></div>');
 }
 function resetConfirmation(mode) {
-  pendingReset=mode;
-  openSheet(mode==='empty'?'从自己的礼物开始':'重新看看示例',`<div id="form-error" class="inline-error" role="alert"></div><div class="tip-box">${mode==='empty'?'将创建一个空的礼物柜，方便收录你们自己的物品。':'将重新载入最初的 8 款示例物品。'}当前清单会保留为上一次备份，可在右上角恢复；更早的替换备份会被更新。</div><div class="button-row"><button class="secondary" data-action="settings">先不替换</button><button class="primary" data-action="confirm-reset">确认${mode==='empty'?'创建空柜子':'载入示例'}</button></div>`);
+  pendingReset=mode;replacementRevision=sync.enabled?sync.revision:undefined;
+  openSheet(mode==='empty'?'从自己的礼物开始':'重新看看示例',`<div id="form-error" class="inline-error" role="alert"></div><div class="tip-box">${mode==='empty'?'将创建一个空的礼物柜，方便收录你们自己的物品。':'将重新载入最初的 8 款示例物品。'}${sync.enabled?'当前清单会保留为云端历史版本，可在设置中恢复上一版。':'当前清单会保留为上一次备份，可在右上角恢复；更早的替换备份会被更新。'}</div><div class="button-row"><button class="secondary" data-action="settings">先不替换</button><button class="primary" data-action="confirm-reset">确认${mode==='empty'?'创建空柜子':'载入示例'}</button></div>`);
 }
 function confirmImport(imported) {
-  pendingImport=imported;
+  pendingImport=imported;replacementRevision=sync.enabled?sync.revision:undefined;
   const replacement=storageError
     ? '当前本机数据无法读取。确认后，将用这份有效备份替换原损坏数据；原始内容会原样留存，可在“设置与备份”里导出，不会被示例数据替代。'
     : `导入后会替换当前的 ${state.items.length} 款物品和 ${state.history.length} 条记录。当前数据会先留存一份，可在“设置与备份”里恢复。`;
   openSheet('导入前确认一下',`<div id="form-error" class="inline-error" role="alert"></div><div class="import-summary">这份备份里有 ${imported.items.length} 款物品、${imported.history.length} 条送出记录。</div><div class="settings-section"><p>${replacement}</p></div><div class="button-row"><button class="secondary" data-action="settings">先不导入</button><button class="primary" data-action="confirm-import">${storageError?'确认替换并恢复':'确认导入'}</button></div>`);
 }
 
-document.addEventListener('click',event=>{
+document.addEventListener('click',async event=>{
   const b=event.target.closest('button');if(!b)return;
+  if(sync.busy){toast('正在同步，请稍候');return;}
   if(b.dataset.view){view=b.dataset.view;render();window.scrollTo({top:0,behavior:'instant'});return;}
   const action=b.dataset.action;if(!action)return;
   try {
@@ -251,14 +325,20 @@ document.addEventListener('click',event=>{
     if(action==='category'){filters.category=b.dataset.category;render();closeSheet();}
     if(action==='go-pick'){view='cabinet';render();window.scrollTo({top:0,behavior:'instant'});}
     if(action==='settings')settings();
+    if(action==='cloud-refresh'){if(sync.pending)throw new Error('请先确认上次保存');await sync.pull(true);toast('已读取 GitHub 最新清单');}
+    if(action==='cloud-signout'){await sync.signOut();photoUrls.clear();closeSheet();render();}
+    if(action==='retry-cloud-save'){await sync.retryPending();closeSheet();toast('上次保存已确认');}
+    if(action==='cloud-start-empty'){await sync.initialize({...createDemoState(),items:[],history:[]});toast('云端礼物柜已创建');}
+    if(action==='cloud-migrate-local'){if(!legacyState)throw new Error('没有可迁移的本机清单');await sync.initialize(legacyState);toast('本机清单和照片已迁移到云端，原本机数据仍保留');}
+    if(action==='cloud-previous'){const previous=await cloud.previous();if(!previous.state)throw new Error('还没有可恢复的云端旧版本');confirmImport(previous.state);}
     if(action==='manage-tags')manageTags();
     if(action==='rename-tag')renameTagForm(b.dataset.group,b.dataset.tag);
     if(action==='delete-tag')deleteTagConfirmation(b.dataset.group,b.dataset.tag);
-    if(action==='confirm-delete-tag')saveTagChange(removeTag(state,b.dataset.group,b.dataset.tag),`已删除“${b.dataset.tag}”`);
+    if(action==='confirm-delete-tag')await saveTagChange(removeTag(state,b.dataset.group,b.dataset.tag),`已删除“${b.dataset.tag}”`);
     if(action==='undo-tag-change'){
       if(!tagUndo)return;
       if(JSON.stringify(state)!==tagUndo.after){tagUndo=null;manageTags();throw new Error('清单已有其他更新，无法撤销这次标签修改。');}
-      save(tagUndo.before);tagUndo=null;manageTags();toast('已撤销标签修改');
+      await save(tagUndo.before);tagUndo=null;manageTags();toast('已撤销标签修改');
     }
     if(action==='start-empty')resetConfirmation('empty');
     if(action==='reload-demo')resetConfirmation('demo');
@@ -266,12 +346,12 @@ document.addEventListener('click',event=>{
       if(!pendingReset)return;
       const next=pendingReset==='empty'?{...createDemoState(),items:[],history:[]}:createDemoState();
       filters=emptyFilters();view='cabinet';
-      save(next,{backup:true,allowRecovery:true});closeSheet();window.scrollTo({top:0,behavior:'instant'});toast('礼物柜已就绪，原清单可以在右上角恢复');
+      await save(next,{backup:true,allowRecovery:true,expectedRevision:replacementRevision});closeSheet();window.scrollTo({top:0,behavior:'instant'});toast('礼物柜已就绪，原清单可在设置中恢复');
     }
     if(action==='editor-tag') {const list=editorDraft.tags[b.dataset.group];const at=list.indexOf(b.dataset.tag);at<0?list.push(b.dataset.tag):list.splice(at,1);refreshTagGroup(b.dataset.group);}
     if(action==='custom-tag')addCustomTag(b.dataset.group);
-    if(action==='undo'){save(undoGift(state,b.dataset.id));toast('已撤销这次送出，数量已放回柜子');}
-    if(action==='export'){download(JSON.stringify(state,null,2),`小心意-礼物柜备份-${today()}.json`);toast('备份已导出，照片和送出记录也在里面');}
+    if(action==='undo'){await save(undoGift(state,b.dataset.id));toast('已撤销这次送出，数量已放回柜子');}
+    if(action==='export'){const exported=sync.enabled && sync.ready?await cloud.exportState(state):(legacyState || state);download(JSON.stringify(exported,null,2),`小心意-礼物柜备份-${today()}.json`);toast('备份已导出，照片和送出记录也在里面');}
     if(action==='export-raw'){download(lastStored || '',`小心意-原始数据-${today()}.json`);}
     if(action==='export-backup-raw'){
       const raw=localStorage.getItem(BACKUP_KEY);if(raw===null)throw new Error('导入前的数据已不存在。');
@@ -279,11 +359,11 @@ document.addEventListener('click',event=>{
     }
     if(action==='confirm-import'){
       if(!pendingImport)return;
-      save(pendingImport,{backup:true,allowRecovery:true});closeSheet();toast('清单已导入，原始数据已留存备份');
+      await save(pendingImport,{backup:true,allowRecovery:true,expectedRevision:replacementRevision});closeSheet();toast('清单已导入，替换前的版本可在设置中恢复');
     }
     if(action==='restore'){
       const backup=validateState(JSON.parse(localStorage.getItem(BACKUP_KEY)));
-      save(backup,{backup:true,allowRecovery:true});settings();toast('已恢复，原来的本机数据已留存备份');
+      await save(backup,{backup:true,allowRecovery:true});settings();toast('已恢复，原来的本机数据已留存备份');
     }
   }catch(error){fieldError(error.message || '操作没有完成，请稍后再试。');}
 });
@@ -316,7 +396,7 @@ document.addEventListener('change',async event=>{
       if(file.size>20*1024*1024)throw new Error('这张照片超过 20MB，请选一张小一点的。');
       const photo=await compressPhoto(file);
       if(!active())return;
-      editorDraft.photo=photo;$('#photo-preview').src=photo;$('#photo-status',sheet).textContent='照片已选好，可以继续填写';toast('照片已选好');
+      editorDraft.photo=photo;editorDraft.photoKey=null;$('#photo-preview').removeAttribute('data-photo-key');$('#photo-preview').src=photo;$('#photo-status',sheet).textContent='照片已选好，可以继续填写';toast('照片已选好');
     }catch(error){if(active()){$('#photo-status',sheet).textContent='这张照片没有选好，请重试';fieldError(error.message);}}finally{if(active())button.disabled=false;}
   }
   if(event.target.id==='import-file'){
@@ -339,9 +419,10 @@ async function compressPhoto(file){
     const result=canvas.toDataURL('image/jpeg',.8);if(result.length>1600000)throw new Error('照片压缩后仍然较大，请换一张试试。');return result;
   }catch(error){throw new Error(error.message?.includes('压缩')?error.message:'照片读取失败，请换一张照片。');}finally{URL.revokeObjectURL(url);}
 }
-document.addEventListener('submit',event=>{
-  if(!['item-form','give-form','rename-tag-form'].includes(event.target.id) && !event.target.matches('.tag-add-form'))return;
+document.addEventListener('submit',async event=>{
+  if(!['item-form','give-form','rename-tag-form','cloud-auth-form'].includes(event.target.id) && !event.target.matches('.tag-add-form'))return;
   event.preventDefault();
+  if(sync.busy)return;
   try{
     const form=event.target;
     if(form.id==='item-form'){
@@ -349,12 +430,17 @@ document.addEventListener('submit',event=>{
       TAG_GROUPS.forEach(g=>{if(!$(`#custom-row-${g.id}`).hidden && $(`#custom-${g.id}`).value.trim())addCustomTag(g.id);});
     }
     const values=Object.fromEntries(new FormData(form));
-    if(form.matches('.tag-add-form')){
-      saveTagChange(addTag(state,form.dataset.group,values.tag),`已添加“${String(values.tag).trim()}”`);
+    if(form.id==='cloud-auth-form'){
+      cloudScreenError='';
+      if(!String(values.token).trim().startsWith('github_pat_'))throw new Error('请使用仅授权数据仓库的 Fine-grained token（以 github_pat_ 开头）。');
+      await sync.signIn(String(values.token).trim(),values.remember==='on');
+      render();
+    }else if(form.matches('.tag-add-form')){
+      await saveTagChange(addTag(state,form.dataset.group,values.tag),`已添加“${String(values.tag).trim()}”`);
     }else if(form.id==='rename-tag-form'){
       const group=form.dataset.group,oldTag=form.dataset.tag,newTag=String(values.tag).trim();
       if(newTag===oldTag){manageTags();return;}
-      saveTagChange(renameTag(state,group,oldTag,newTag),`已改名为“${newTag}”`,{group,oldTag,newTag});
+      await saveTagChange(renameTag(state,group,oldTag,newTag),`已改名为“${newTag}”`,{group,oldTag,newTag});
     }else if(form.id==='item-form'){
       if($('#save-item').disabled)return;
       if(TAG_GROUPS.some(g=>editorDraft.tags[g.id].some(tag=>editorCatalogBase[g.id].includes(tag) && !state.tagCatalog[g.id].includes(tag))))throw new Error('选中的标签已在另一个窗口修改或删除，请重新打开物品后再编辑。');
@@ -362,19 +448,27 @@ document.addEventListener('submit',event=>{
       if(editorBase && JSON.stringify(current)!==editorBase)throw new Error('这个物品已在另一个窗口修改，请重新打开后编辑。');
       const item={...editorDraft,...values,quantity:Number(values.quantity)};
       let next=state;for(const category of editorCategories)if(!next.categories.includes(category))next=addCategory(next,category);
-      save(upsertItem(next,item));closeSheet();toast('物品已保存');
+      await save(upsertItem(next,item));closeSheet();toast('物品已保存');
     }else{
-      save(giveItem(state,{itemId:form.dataset.id,quantity:Number(values.quantity),recipient:values.recipient,note:values.note,date:values.date}));
+      if(sync.enabled && form.dataset.base!==JSON.stringify(state.items.find(item=>item.id===form.dataset.id)))throw new Error('这件物品已在另一台设备更新，请重新打开送出页面核对后再试。');
+      await save(giveItem(state,{itemId:form.dataset.id,quantity:Number(values.quantity),recipient:values.recipient,note:values.note,date:values.date}));
       closeSheet();toast('已记录送出，数量已更新');
     }
-  }catch(error){fieldError(error.message || '保存没有完成，请检查填写内容。');}
+  }catch(error){if(['cloud-auth-form'].includes(event.target.id)){cloudScreenError=error.message;render();}else fieldError(error.message || '保存没有完成，请检查填写内容。');}
 });
 $('.brand').addEventListener('click',event=>{event.preventDefault();view='cabinet';render();window.scrollTo({top:0,behavior:'instant'});});
 sheet.addEventListener('click',event=>{if(event.target===sheet){const rect=sheet.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)closeSheet();}});
+sheet.addEventListener('cancel',event=>{if(sync.busy){event.preventDefault();toast('正在同步，请稍候');}});
 sheet.addEventListener('close',()=>{if(!sheet.open){const filtering=Boolean(activeFilter);clearSheetState();if(filtering)render();}});
 window.addEventListener('storage',event=>{
+  if(sync.enabled)return;
   if(event.key!==KEY)return;
   try{const updated=event.newValue?validateState(JSON.parse(event.newValue)):createDemoState();state=updated;lastStored=event.newValue;storageError='';render();toast('同一设备的另一个窗口更新了清单');}
   catch{lastStored=event.newValue;storageError='其他窗口保存的数据暂时无法读取，已暂停日常保存。请先导出原始数据，再导入有效备份恢复。';render();toast('本机数据暂时无法读取，请先导出原始数据。');}
 });
 render();
+
+bootstrapCloud().catch(error=>{cloudScreenError=error.message;render();});
+setInterval(()=>{if(sync.enabled && sync.session && document.visibilityState==='visible')sync.pull().catch(()=>{});},15000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible' && sync.enabled)sync.pull().catch(()=>{});});
+window.addEventListener('online',()=>{if(sync.enabled)sync.pull(true).catch(()=>{});});
